@@ -35,3 +35,6 @@ Thumbs.db
 desktop.ini
 *:Zone.Identifier
 __pycache__/
+
+# a huge bulk of show only images that are non-gamebreaking
+game/images/**/*.webp

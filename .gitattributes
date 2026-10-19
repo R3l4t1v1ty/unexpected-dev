@@ -1,21 +1,20 @@
 # Store text files with LF line endings, whatever OS edits them.
 * text=auto eol=lf
-
 # Game assets: never touch line endings or try to diff them.
-*.png binary
-*.jpg binary
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
 *.jpeg binary
-*.webp binary
+*.webp filter=lfs diff=lfs merge=lfs -text
 *.avif binary
 *.svg binary
-*.ogg binary
-*.opus binary
-*.mp3 binary
-*.wav binary
+*.ogg filter=lfs diff=lfs merge=lfs -text
+*.opus filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.wav filter=lfs diff=lfs merge=lfs -text
 *.flac binary
-*.webm binary
+*.webm filter=lfs diff=lfs merge=lfs -text
 *.mp4 binary
-*.ttf binary
-*.otf binary
+*.ttf filter=lfs diff=lfs merge=lfs -text
+*.otf filter=lfs diff=lfs merge=lfs -text
 *.ico binary
 *.rpa binary

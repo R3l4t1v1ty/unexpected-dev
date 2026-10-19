@@ -1,6 +1,10 @@
 {
   "permissions": {
-    "blockReadsOutsideWorkingDirectories": true
+    "blockReadsOutsideWorkingDirectories": true,
+    "deny": [
+      "Bash(git init)",
+      "Bash(git init *)"
+    ]
   },
   "sandbox": {
     "enabled": true,

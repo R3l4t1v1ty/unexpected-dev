@@ -23,7 +23,7 @@ When Claude is started inside one subfolder, it can only read and edit files in 
 Every folder under `game/code/` gets its lock and a starter CLAUDE.md from `.claude/sync-folders.py`. It runs by itself whenever `claude` starts from a terminal inside the project. After creating a folder in an unlocked session, run `python3 .claude/sync-folders.py` from `game/code/`. To change the lock for all folders, edit `.claude/folder-template/settings.json`, not the copies.
 
 ## Git
-The git repo is the whole project folder (`unexpected/`). A session locked to one folder can't see it, so git commands fail there with "not a git repository". That's expected: never run `git init` to fix it. Tell the user to commit from the project root instead.
+The git repo is the whole project folder (`unexpected-dev/`). A session locked to one folder can't see it, so git commands fail there with "not a git repository". That's expected: never run `git init` to fix it. Tell the user to commit from the project root instead.
 
 ## Shared rules
 <!-- Project-wide rules go here: naming style, comment style, which folder may use which, etc.

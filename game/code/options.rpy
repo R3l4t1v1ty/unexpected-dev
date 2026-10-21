@@ -186,6 +186,20 @@ init python:
     build.classify('**CLAUDE.md', None)
     build.classify('**CLAUDE.local.md', None)
 
+    ## Planning files and developer-only code (see design/README.md). A
+    ## trailing / excludes a whole folder; 'design/**' would still ship an
+    ## empty design folder.
+
+    build.classify('design/', None)
+    build.classify('**/TASKS.md', None)
+    build.classify('game/code/dev/', None)
+    build.classify('game/code/adventure/editor_*', None)
+    build.classify('game/code/**_test.rpy', None)
+    build.classify('game/code/**_test.rpyc', None)
+    build.classify('game/code/physics/test_*', None)
+    build.classify('game/code/**/ref_*', None)
+    build.classify('**/__pycache__/', None)
+
     ## To archive files, classify them as 'archive'.
 
     # build.classify('game/**.png', 'archive')

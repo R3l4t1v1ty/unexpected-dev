@@ -1,17 +1,11 @@
 # story/
 
-<!-- Rules for this folder. Claude reads this file whenever it works here, and at startup
-     when you launch Claude from this folder. Comments like this are hidden from Claude.
-
-     Worth writing down:
-     - How files are split (per chapter? per route? per character?)
-     - Label naming (e.g. ch1_intro, ch1_choice_a)
-     - Writing style: tone, character voices, things characters never say
-     - Which core/ systems story code may call
-     Short, specific rules work better than long explanations.
-
-     The purpose line below is a guess from the folder name. Replace it. -->
-
-The story itself: labels, dialogue and scene flow.
+## Purpose
+The story: dialogue, scenes and story content (events' labels, NPC and object interactions, the real characters, events, shops and maps' dialogue). Not started yet; it begins after the game systems are built.
 
 ## Rules
+- Use only the public API listed in game/code/CLAUDE.md. A session here can't see the system folders. If something is missing, say which API is needed instead of working around it.
+- Content labels come from `core.label_for(...)` and must `return`; never `jump` back into the world.
+- Further rules (file layout per twin/arc, label naming, writing style, character voices) are decided when story work starts.
+
+@TASKS.md

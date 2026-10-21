@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "blockReadsOutsideWorkingDirectories": true,
+    "deny": [
+      "Bash(git init)",
+      "Bash(git init *)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$CLAUDE_PROJECT_DIR\"; until [ -f \"$d/.claude/hooks/stay-in-folder.py\" ] || [ \"$d\" = / ]; do d=$(dirname \"$d\"); done; exec python3 \"$d/.claude/hooks/stay-in-folder.py\"",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}

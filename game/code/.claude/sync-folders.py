@@ -5,6 +5,8 @@ Each folder gets:
   .claude/settings.json  the folder lock, kept identical to .claude/folder-template/settings.json.
                          Edit the template, not the copies: this script overwrites them.
   CLAUDE.md              a starter file from the template, only if the folder has none.
+  TASKS.md               a starter task list from the template, only if the folder has none.
+                         The template CLAUDE.md imports it with @TASKS.md.
 
 Safe to run any time. Prints only what it changed.
 """
@@ -31,6 +33,7 @@ def write(path, text):
 
 settings = read(os.path.join(TEMPLATE, "settings.json"))
 claude_md = read(os.path.join(TEMPLATE, "CLAUDE.md"))
+tasks_md = read(os.path.join(TEMPLATE, "TASKS.md"))
 
 for root, dirs, _files in os.walk(CODE):
     dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP)
@@ -48,3 +51,8 @@ for root, dirs, _files in os.walk(CODE):
     if not os.path.exists(md_path):
         write(md_path, claude_md.replace("{folder}", folder))
         print(f"[claude] added CLAUDE.md: {folder}/")
+
+    tasks_path = os.path.join(root, "TASKS.md")
+    if tasks_md is not None and not os.path.exists(tasks_path):
+        write(tasks_path, tasks_md.replace("{folder}", folder))
+        print(f"[claude] added TASKS.md: {folder}/")

@@ -7,9 +7,10 @@ Ren'Py 8.5 visual novel / sandbox for PC and Android, with twin protagonists Ayu
 |---|---|
 | `core/` | Definitions and registry, saved state `gs` and flags, twins, time, signals, `Req` conditions, saves and migrations, `label start` |
 | `world/` | World mode: location graph, objects and NPCs, world view and loop, map and fast travel |
-| `characters/` | Characters and speakers, encyclopedia, factions and reputation, relationships |
+| `characters/` | Characters and speakers, encyclopedia, relationships (stats, statuses, activities) |
+| `factions/` | Factions, reputation (per twin), quests |
 | `events/` | Story events: lines, triggers, progress, event book, Story tab, replay |
-| `rpg/` | Stats, items, gear, inventory, currencies, shops, progression, stat checks, combat rules |
+| `rpg/` | Stats, abilities, items, gear, inventory, loot, crafting, currencies, shops, shared chest, gifts, combat numbers |
 | `physics/` | Godot-style 2D math, collision and pathfinding (plain Python modules) |
 | `adventure/` | Top-down adventure mode and its map maker (`editor_*.rpy`, not shipped) |
 | `computer/` | In-game computer and GossipUp |
@@ -33,7 +34,7 @@ When Claude is started inside one subfolder, it can only read and edit files in 
 
 - **Publishing APIs.** When you add or change something other folders use (function, class, screen, label, signal, `Req`), finish by printing the exact lines to change in the Public API section below, and tick the task in your TASKS.md. You can't edit this file from a locked folder. The user applies the lines, or a session started in `game/code/` (not locked; the integration session) does.
 - **Running the game.** Locked sessions can't run Ren'Py (it writes outside the folder). Ask the user to run, from the project root, `~/renpy-8.5.3-sdk/renpy.sh . lint` or `~/renpy-8.5.3-sdk/renpy.sh .`; phone layout with `RENPY_VARIANT="small phone touch android mobile"` in front.
-- **Old code.** The old versions live outside the project. When porting, ask the user to copy the needed files into your folder as `ref_*.txt` (excluded from builds; delete them when done).
+- **Old code and reference files.** The old versions live outside the project, and the user's reference files (images, notes) are in `game/dev_resources/` (git-ignored, not shipped). A locked session can't read either: what a folder needs is transcribed into its TASKS.md. If you need more, ask the user to copy the file into your folder as `ref_*` (excluded from builds; delete when done).
 
 Every folder under `game/code/` gets its lock, a starter CLAUDE.md and a starter TASKS.md from `.claude/sync-folders.py`. It runs by itself whenever `claude` starts from a terminal inside the project. After creating a folder in an unlocked session, run `python3 .claude/sync-folders.py` from `game/code/`. To change the lock for all folders, edit `.claude/folder-template/settings.json`, not the copies.
 
@@ -55,7 +56,7 @@ The git repo is the whole project folder (`unexpected-dev/`). A session locked t
 - Ids are ASCII `snake_case`, unique per kind, never shown to players, never renamed after a release (otherwise add to `core.RENAMES`). Location ids are `space.place.location`.
 - Label names and asset paths come only from `core.label_for(kind, id, verb=None)` and `core.asset(kind, id, *parts)` (dots become `__` in labels; a Ren'Py label can't contain two dots).
 - Visible text is `_()` literals; substitute with `[var]` or `__()`, never `_("…").format()`.
-- Every global name starts with its folder's prefix: `core`, `world`, `chars`, `events`, `rpg`, `uxphys_`, `adv`/`adventure_`, `pc`, `mini`, `prog`, `fx`, `uix`, `dev`. Exceptions: `gs`, `Req…` classes, Ren'Py's standard screen names, story speaker names.
+- Every global name starts with its folder's prefix: `core`, `world`, `chars`, `fac`, `events`, `rpg`, `uxphys_`, `adv`/`adventure_`, `pc`, `mini`, `prog`, `fx`, `uix`, `dev`. Exceptions: `gs`, `Req…` classes, Ren'Py's standard screen names, story speaker names.
 - Never use these names: anything starting with `_`, `Condition`, `Gallery`, `achievement`, `ui`, `gui`, `audio`, `layout`, `config`, `style`, `map`, `filter`, `id`, `type`, `next`, `object`.
 
 **Init order and files**
@@ -102,10 +103,16 @@ What each folder offers the others. ○ planned (names may change until done) ·
 **characters**
 - ○ `chars.add(...)`, `chars.get(id)`, story speaker names (decided in characters task 1)
 - ○ `chars.introduce(id)`, `chars.known(id, twin=None)`, `ReqKnown(id)`
-- ○ `chars.add_faction(id, name)`, `chars.rep(faction)`, `chars.add_rep(faction, amount)`
-- ○ `chars.rel(id, stat, twin=None)`, `chars.add_rel(id, stat, amount)`, `ReqRel(id, stat, min)` (skeleton until the relationship design)
+- ○ Relationships (per twin; stats `friendliness`, `commitment`, `attraction` 0–100; ten statuses `acquaintances`, `friends`, `buddy`, `colleague`, `casual`, `lovers`, `fwb`, `romantic`, `platonic`, `soulmate`): `chars.add_relationship(char, twins)`, `chars.rel(char, stat, twin=None)`, `chars.add_rel(char, stat, amount)`, `chars.status(char, twin=None)`, `chars.tier(status)` (0 acquaintances; 1 friends/colleague/casual/buddy; 2 lovers/fwb/romantic/platonic; 3 soulmate), `chars.reached(char, status, twin=None)`, `chars.path(char, twin=None)` (statuses entered since the last reset), `chars.reset_rel(char)`, `chars.register_gain_modifier(fn)`, `ReqRel(char, stat, min)`, `ReqRelStatus(char, *statuses)`, `ReqRelReached(char, status)`, `ReqRelPath(char, *statuses)`. A relationship event can only be played after at least one of that character's events from the tier below (events/ enforces it)
+- ○ Activities: `chars.add_activity(...)`, `chars.add_beat(...)`, `call chars_activity(activity_id)` (costs 1 slot)
 - ○ `screen chars_encyclopedia`, `screen chars_page(char_id)`, `chars.register_page_section(id, screen)`
-- Signals: ○ `character_introduced(twin, char)`, `relationship_changed(twin, char, stat, value)`, `reputation_changed(faction, value)`
+- Signals: ○ `character_introduced(twin, char)`, `relationship_changed(twin, char, stat, value)`, `relationship_status_changed(twin, char, status)`
+
+**factions** (M3)
+- ○ `fac.add(id, name, location, opens=Req)`, `fac.get(id)`, `fac.is_open(faction)`
+- ○ `fac.rep(faction, twin=None)`, `fac.add_rep(faction, amount)`, `fac.tier(faction)`, `ReqRep(faction, tier)` (reputation is per twin)
+- ○ Quests: `fac.add_quest(...)`, `fac.start(quest)`, `fac.complete_objective(quest, objective)`, `fac.turn_in(quest)`, `fac.quest_state(quest)`, `ReqQuest(quest, state)`, quest log screen
+- Signals: ○ `faction_opened(twin, faction)`, `reputation_changed(twin, faction, value)`, `quest_started(twin, quest)`, `quest_completed(twin, quest)`
 
 **events**
 - ○ `events.add_line(...)`, `events.add(...)`; event labels `core.label_for("event", id)`
@@ -114,12 +121,14 @@ What each folder offers the others. ○ planned (names may change until done) ·
 - ○ `screen events_book(char_id)`, HUD panel `events_tracker_panel`, Story and Events tabs
 - Signals: ○ `event_started(twin, event)`, `event_finished(twin, event)`
 
-**rpg** (shape depends on the RPG design)
+**rpg** (stats `str`, `int`, `dex`, `cha`; currencies `gold`, `yen`; all per twin)
 - ○ `rpg.give(item, n=1)`, `rpg.take(item, n=1)`, `rpg.has(item, n=1)`, `ReqItem(item, n=1)`
-- ○ `rpg.stat(name, twin=None)`, `rpg.check(stat, difficulty)`, `ReqStat(stat, min)`
-- ○ `rpg.money(currency)`, `rpg.add_money(currency, n)`, `call rpg_shop(shop_id)`
-- ○ HUD panels `rpg_inventory_panel`, `rpg_character_panel`; combat API for adventure
-- Signals: ○ `item_changed(twin, item, count)`, `level_up(twin, level)`, `stat_checked(twin, stat, success)`
+- ○ `rpg.stat(stat, twin=None)` (base + gear + effects), `rpg.base(stat, twin=None)`, `rpg.train(stat, amount)`, `ReqStat(stat, min)`. Stat checks are fixed thresholds, no dice: gate a menu choice with `req=ReqStat(...)` (see ui)
+- ○ `rpg.learn(ability)`, `rpg.empower(ability, upgrade)`, `rpg.knows(ability)`, `ReqAbility(ability)`, `rpg.set_weapon(weapon)`
+- ○ `rpg.money(currency)`, `rpg.add_money(currency, n)`, `ReqMoney(currency, n)`
+- ○ `call rpg_shop(shop_id)`, `call rpg_craft(station_id)`, `call rpg_chest`, `call rpg_gift(char_id)`, `rpg.learn_recipe(recipe)`, `rpg.roll_loot(table_id)`, `rpg.register_price_modifier(fn)`
+- ○ HUD panels `rpg_inventory_panel`, `rpg_character_panel`; combat numbers for adventure (derived stats, ability data, damage)
+- Signals: ○ `item_changed(twin, item, count)`, `stat_changed(twin, stat, value)`, `ability_learned(twin, ability)`, `item_crafted(twin, item, count)`
 
 **physics** (`import uxphys_math` etc., after init -600; plain .py modules, physics objects are never saved)
 - ✔ `uxphys_math`: `Vector2`, `Vector2i`, `Rect2`, `Rect2i`, `Transform2D` (Godot 4.4), Godot helpers (`lerp`, `move_toward`, `clampf`, `snapped`, `lerp_angle`…)
@@ -131,7 +140,8 @@ What each folder offers the others. ○ planned (names may change until done) ·
 - ○ `call adventure(world_id, entry_id)`: runs adventure mode until the player leaves; `_return` says how
 - ○ `adv.entity_type(name)`; adventure content labels `core.label_for("adv", id, verb)`
 - ○ Map files under `game/maps/<world>/` (format v1, see adventure/)
-- Signals: ○ `adventure_entered(twin, world)`, `adventure_left(twin, world, how)`
+- ○ A run costs 1 time slot; loot is kept on leaving or victory, lost on defeat
+- Signals: ○ `adventure_entered(twin, world)`, `adventure_left(twin, world, how)`, quest-goal signals (boss defeated, place reached, thing found; names decided in adventure task 8)
 
 **computer**
 - ○ `call pc_open`, `pc.register_app(id, name, screen, requires=None)`, GossipUp definitions (after design)
@@ -153,5 +163,6 @@ What each folder offers the others. ○ planned (names may change until done) ·
 - ○ `uix.register_menu_tab(id, name, screen, order=100, requires=None)`, `uix.register_hud_panel(id, screen, name, order=100)`, `screen hud_root`
 - ○ `uix.notify(text)`, components `uix_panel(title)` and friends, tap-to-place helper
 - ○ Say screen: thought lines via `Character(..., show_thought=True)`
+- ○ Choice screen: a choice with `req=` (any `Req`), e.g. `"Lift the beam" (req=ReqStat("str", 12)):`, shows greyed out with `req.describe()` when it fails; use `if` to hide a choice instead
 
 **dev**: nothing; no folder may depend on dev/.

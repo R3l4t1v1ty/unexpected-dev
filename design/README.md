@@ -15,6 +15,8 @@ Scope right now: **game systems only.** Story content comes later.
 | [old-versions.md](old-versions.md) | Where the old projects are, what to reuse, mistakes not to repeat |
 | [systems/](systems/) | One design doc per code folder |
 
+The user's reference files (world graph, relationship diagram, old code) are in `game/dev_resources/`. That folder is git-ignored and excluded from builds. Locked sessions can't read it, so what a folder needs is transcribed into its `TASKS.md`.
+
 ## How design/, CLAUDE.md and TASKS.md fit together
 
 ```

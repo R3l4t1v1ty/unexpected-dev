@@ -92,8 +92,8 @@ A small synchronous publish/subscribe in core, Godot-flavoured: `core.connect("l
 ## 5. Twins and time
 
 - `core.TWINS = ("ayumu", "nemu")`. `gs.twin` is the current twin. Code never branches on twin names; per-twin differences go in data tables keyed by twin id.
-- Shared between twins: the world graph, characters, factions and reputation, gallery, achievements.
-- Separate per twin: clock, current location, favourite locations, event progress, location/object/NPC flags, relationship values, RPG character (stats, gear, inventory), computer.
+- Shared between twins: the world graph, characters, gallery, achievements, the chest at Home.
+- Separate per twin: clock, current location, favourite locations, event progress, location/object/NPC flags, relationship values, reputation and quests, RPG character (stats, abilities, gear, inventory, money, recipes), adventure progress, computer.
 - Each twin has its own clock: `day` (1, 2, 3, …) and `slot` (0 morning, 1 afternoon, 2 evening, 3 night). **No weeks.** Slots are 0-based everywhere. `core.advance(n)` moves forward n slots, `core.sleep()` moves to the next morning; both emit `time_changed`.
 - Swapping twins happens from the game menu only while the world loop is idle (not during content). It uses `renpy.jump_out_of_context("world_swap")`.
 

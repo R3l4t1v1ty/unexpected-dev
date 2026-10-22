@@ -12,7 +12,7 @@ The most complete system in the old versions; keep its data model:
 Old: groups → achievements → goal objects (`goal_done`, `progress_text`), claimed manually, a claim unlocked a gallery picture; only "time played" and one guessing-game goal existed, with placeholder groups copy-pasted.
 
 New direction (confirm in the design session):
-- Achievement definitions with a goal expressed as a `Req` (one-off conditions) or a counter fed by signals (`event_finished`, `location_entered`, `item_changed`, `level_up`…), so achievements need no code in other folders.
+- Achievement definitions with a goal expressed as a `Req` (one-off conditions) or a counter fed by signals (`event_finished`, `location_entered`, `item_changed`, `item_crafted`, `relationship_status_changed`, `quest_completed`…), so achievements need no code in other folders.
 - Progress text and percentage for counters.
 - Claiming gives rewards (gallery pictures, maybe items or currency), with a toast on unlock.
 - Signals are ignored during replays (`_in_replay`).

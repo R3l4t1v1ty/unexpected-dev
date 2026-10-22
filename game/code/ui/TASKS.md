@@ -28,7 +28,8 @@ Milestones: tasks 1–4 in **M1**, the rest in **M2**.
 - [ ] 7. **Preferences.** Tabs: General, Textbox, Accessibility (reduced motion, fake loading, minigame skip, text size), Language. Done when: toggles change the persistent values.
 - [ ] 8. **Main menu.** Data-driven parallax layers and floating items, touch fallback, links, version. Needs art from the user (placeholders until then). Done when: runs on PC and under phone emulation.
 - [ ] 9. **Quick menu.** PC and touch versions with Game and Story buttons opening the game menu on the right tab. Done when: both versions work.
-- [ ] 10. **Publish.** Print the ui section for game/code/CLAUDE.md.
+- [ ] 10. **Choice screen with requirements.** A menu choice may carry `req=` (any `Req`), e.g. `"Lift the beam" (req=ReqStat("str", 12)):`. Ren'Py passes per-choice arguments to `screen choice` as `i.kwargs` (checked in the 8.5 SDK, renpy/exports/menuexports.py). When `i.kwargs["req"].check()` fails, show the choice greyed out and insensitive, with `req.describe()` beside it ("Strength 12"); choices without `req` work as usual. Done when: a test menu shows a met and an unmet requirement on PC and phone, and the unmet one can't be picked by mouse, keyboard or touch.
+- [ ] 11. **Publish.** Print the ui section for game/code/CLAUDE.md.
 
 ## API to publish
-`uix.register_menu_tab`, `uix.register_hud_panel`, `hud_root`, `uix.notify`, components, tap-to-place helper, say-screen thought support.
+`uix.register_menu_tab`, `uix.register_hud_panel`, `hud_root`, `uix.notify`, components, tap-to-place helper, say-screen thought support, choice `req=` support.

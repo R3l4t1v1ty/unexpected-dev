@@ -191,6 +191,7 @@ init python:
     ## empty design folder.
 
     build.classify('design/', None)
+    build.classify('game/dev_resources/', None)
     build.classify('**/TASKS.md', None)
     build.classify('game/code/dev/', None)
     build.classify('game/code/adventure/editor_*', None)

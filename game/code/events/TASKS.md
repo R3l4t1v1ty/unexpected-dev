@@ -15,6 +15,12 @@ Reference: rebuild #2's event system.
   - Event location keys were wrong in several places, which a validator would have caught.
 - The released game also hid NPCs from the sandbox while an event involving them was pending, and showed pending events as markers on the map.
 - Deeper changes are expected: task 1 is a design session with the user.
+- **From the RPG and relationship design (2026-10-23):**
+  - Relationship events: ten per relationship character, one per relationship status. Each unlocks when the twin first reaches its status (`ReqRelReached(char, status)` from characters) and stays unlocked. They don't chain in order like a line, so the model must allow events that only have conditions (or lines that don't auto-chain). They're one-time; replay can show them again.
+  - **Tier rule** for relationship events (the user, 2026-10-23): statuses form tiers, t0 acquaintances; t1 friends, colleague, casual, buddy; t2 lovers, fwb, romantic, platonic; t3 soulmate (`chars.tier(status)`). An event can only be played once the twin has played at least one of that character's relationship events from the tier below (t0 needs nothing). Suggested shape: `events.add(..., rel=(char, status))` adds both conditions automatically.
+  - The soulmate event can vary with the path the twin took (`chars.path(char)`, `ReqRelPath`).
+  - Events can start from adventure mode (an area or object in a map), not only from world locations.
+  - Choices inside events can carry `req=` (ui's choice screen greys out failed ones): stats (`ReqStat`), items (`ReqItem`), reputation (`ReqRep`), relationships (`ReqRel…`).
 
 New-model sketch (confirm in task 1):
 - Progress per twin: locked → available → done.
@@ -31,7 +37,7 @@ Replay facts (checked in the SDK):
 ## Uses
 - core: `Definition`, registry, flags, `register_state`, `me()`, `Req…`, signals, `label_for`, `StateAction`, `swap()`.
 - world: `world.register_entry_hook`, `world.register_hidden_provider`, `world.register_marker_provider`, `world.idle()`, `label world_swap`, signal `location_entered`.
-- characters: `chars.get`, `chars.register_page_section`.
+- characters: `chars.get`, `chars.register_page_section`, `ReqRelReached`, `chars.tier`, `chars.path` (relationship events).
 - ui: `uix.register_menu_tab`, `uix.register_hud_panel`, `fx_mirage` from fx for the Story-tab hover.
 
 ## Tasks

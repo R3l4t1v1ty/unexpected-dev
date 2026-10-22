@@ -38,3 +38,4 @@ __pycache__/
 
 # a huge bulk of show only images that are non-gamebreaking
 game/images/**/*.webp
+game/dev_resources/

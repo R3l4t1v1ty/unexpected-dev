@@ -10,11 +10,13 @@ This rebuild is the third attempt at the codebase:
 
 ## Two modes
 
-**World mode** (the sandbox). The world is a graph of **locations**, the smallest unit. Locations are grouped into **places** (Home, School, Park), and places into **spaces** (Town). Spaces and places are only for grouping and maps. Each location shows a background for the time of day, buttons for its connections, and clickable **objects** and **NPCs**. Clicking one opens its actions (chat, look, …), which run content. The world will grow a lot: two new whole spaces and connections between spaces.
+**World mode** (the sandbox). The world is a graph of **locations**, the smallest unit. Locations are grouped into **places** (Home, School, Park), and places into **spaces** (Town). Spaces and places are only for grouping and maps. Each location shows a background for the time of day, buttons for its connections, and clickable **objects** and **NPCs**. Clicking one opens its actions (chat, look, …), which run content. The world will grow a lot: two new spaces, Hell Citadel and Order HQ, joined to the town (Henyutamei) by portals.
 
-The core of world-mode play is the **relationship system**: chosen NPCs have their own storylines in world mode, driven by relationship progress.
+The core of world-mode play is the **relationship system**: chosen NPCs each get three repeatable activities (one per relationship stat) and ten relationship events (one per relationship status), so their storylines grow out of world-mode play.
 
-**Adventure mode** (new). A top-down, RPG Maker–like mode, entered from the world. Painted rooms, free movement, NPCs and objects to interact with, doors and room edges, combat. Maps are made in a map maker.
+The **RPG** runs through both modes: stats (str, int, dex, cha) gate choices in events, items unlock dialogue options, factions open shops, recipes and services as reputation grows.
+
+**Adventure mode** (new). A top-down, RPG Maker–like mode, entered from the world: the RPG's playground. Hand-made painted rooms, pre-rendered sprites, free movement, NPCs and objects, enemies, loot and crafting materials, real-time combat with each twin's own abilities. Maps are made in a map maker.
 
 ## Systems
 
@@ -23,9 +25,10 @@ The core of world-mode play is the **relationship system**: chosen NPCs have the
 | State, ids, twins, time, saves | `core/` | Changed | Saves hold only flags; stable ids; days without weeks |
 | World | `world/` | Kept, grows | Same model, but a real graph with cross-space connections |
 | Characters + encyclopedia | `characters/` | Kept (rebuild #2 baseline) | More additions to come |
-| Relationships | `characters/` | **New** | Core of world-mode play; design later |
+| Relationships | `characters/` | **New** | Core of world-mode play; 3 stats, 10 statuses, 3 activities and 10 events per character |
+| Factions, reputation, quests | `factions/` | **New** (was planned in characters) | Per-twin reputation; quests; shops, discounts, recipes, services |
 | Events | `events/` | Changed | Rebuild #2 as reference, deeper changes later |
-| RPG | `rpg/` | **Full rebuild** | Combat, stat checks, items/gear/shops, progression; most important system |
+| RPG | `rpg/` | **Full rebuild** | Stats, abilities, items, loot, crafting, gold and yen, shops; stat-gated choices; most important system |
 | Physics | `physics/` | **New** (light Godot port) | Pure Python; used by adventure mode and maybe minigames |
 | Adventure mode + map maker | `adventure/` | **New** | Reference: ActionAdventureMode prototype |
 | Computer + GossipUp | `computer/` | Big rebuild | Fake social network; chats can start events |

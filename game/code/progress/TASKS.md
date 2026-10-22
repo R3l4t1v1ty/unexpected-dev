@@ -23,7 +23,7 @@ Both achievements and gallery unlocks are **per save** (shared between the twins
 - events: `events.done`, `events.replay_action`, signal `event_finished`.
 - ui: `uix.register_menu_tab`, `uix.notify`, components.
 - fx: `fx_mirage` (optional hover effects).
-- Other signals for counters: `location_entered`, `item_changed`, `level_up`, `relationship_changed`, `time_changed`.
+- Other signals for counters: `location_entered`, `item_changed`, `item_crafted`, `stat_changed`, `relationship_status_changed`, `quest_completed`, `time_changed`.
 
 ## Tasks
 - [ ] 1. **(needs user) Achievement design.** Kinds of goals, rewards, and whether any also mirror to Steam or another platform. Rewrite this Context with the result.

@@ -3,7 +3,20 @@
 Milestone: **M4** (needs physics, core, ui; combat needs rpg's combat API).
 
 ## Context
-Decisions:
+From the RPG design with the user (2026-10-23):
+- **What it is:** the RPG's playground: interactable objects, NPCs, enemies, items and loot (crafting materials come from here), real-time combat. It can start events.
+- **Art:** almost everything is pre-rendered sprites. Only VFX are drawn in code (shapes, particles, shaders).
+- **Hand-made maps**, no shuffled layouts. Ten entrances on the world graph: Beach, Underground, Prison, Destruction Fields, Frostlands, Ruins of Silver Cities, Satyr Forest, Spec Ops, Magical Forest, Shroomie Caves.
+- **Replayable:** enemies and loot come back on every visit, except certain bosses and hidden loot, which are one-time per twin (permanent progress).
+- **A run costs 1 time slot** (`core.advance(1)`). Victory or leaving keeps what was found. Defeat sends the twin back to the entrance and loses the run's loot: picked-up items stay in the run's state until it ends, then go to the inventory with `rpg.give`.
+- **Combat:**
+  - Real time. Each twin has their own fixed kit, and the story adds and empowers abilities (e.g. Nemu's claw swipe later gains bonus fire damage).
+  - rpg/ holds ability data, derived stats and the damage function. This folder implements how abilities move and hit.
+  - Not in the first version: companions, charming enemies.
+- **Loot:** enemies, chests and hidden spots roll rpg loot tables (`rpg.roll_loot(table_id)`).
+- **Quests:** factions/ needs adventure goals as signals: boss defeated, place reached, thing found.
+
+Earlier decisions:
 - Maps are **whole-room painted images** (layers) plus a painted collision mask, not tilesets. Layers are cut into chunks of ≤ 2048 px (Android's texture limit is 4096).
 - The **map maker is a port** of the old prototype's editor, improved.
 - Saves hold only plain state; the runtime is rebuilt on load.
@@ -46,19 +59,20 @@ Rules for map files:
 - physics: `uxphys_math`, `uxphys_collide` (`CollisionGrid`, `Body`, `Area`, `raycast`), `uxphys_path` (`astar`, `smooth_path`).
 - core: `register_state`/`state`, `me()`, `label_for`, `asset`, signals, `StateAction`.
 - ui: components, `uix.notify`, touch variants.
-- rpg: combat API, `rpg.give` (pickups).
+- rpg: combat numbers (derived stats, ability data, damage), `rpg.give`, `rpg.roll_loot`.
+- events: starting an event from an area or object (`events.start(id)` or the event's label; follow events' published API).
 - world: how adventure is entered from a world object (`call adventure(world_id, entry_id)` from a content label) and where the player returns.
 
 ## Tasks
 - [ ] 1. **Map format v1.** Finalise the format, write a loader with version checks and clear errors, chunked layers, collision mask → `CollisionGrid`. Done when: a hand-made test map with 2 rooms loads.
 - [ ] 2. **Runtime and view.** Runtime in a constant store; displayable with fixed tick, interpolation, idle sleep (no redraw when nothing moves or while paused); camera; draw order and culling. Done when: a test character walks around a test room smoothly, and CPU is near idle when standing still.
-- [ ] 3. **Loop, sync, rebuild.** `label adventure(world_id, entry_id)`; `call screen adventure_view` returning action tuples; plain state in `core.state("adv")` synced with `renpy.retain_after_load()`; rebuild on load. Done when: saving in a room and loading puts the player back in the same room and position.
+- [ ] 3. **Loop, sync, rebuild.** `label adventure(world_id, entry_id)`; `call screen adventure_view` returning action tuples; plain state in `core.state("adv")` synced with `renpy.retain_after_load()`; rebuild on load; a run costs 1 slot; the run's loot is held until the run ends, kept on leaving or victory, lost on defeat (back at the entrance). Done when: saving in a room and loading puts the player back in the same room and position, and leaving vs defeat treat test loot correctly.
 - [ ] 4. **Input and touch.** Named actions; keyboard, click/tap-to-move with A*; virtual stick and on-screen buttons under `touch`. Done when: playable on PC and under phone emulation.
-- [ ] 5. **Entities.** `@adv.entity_type` registry with editor property specs; npc, interact, door, exit, enemy, prop, marker, area trigger; physics Areas for triggers; labels via `core.label_for("adv", id, verb)` called and resumed. Done when: test room has a talking NPC, a door and an area trigger.
+- [ ] 5. **Entities.** `@adv.entity_type` registry with editor property specs; npc, interact, door, exit, enemy, prop, marker, area trigger, chest/loot spot (loot table, one-time or respawning); physics Areas for triggers; labels via `core.label_for("adv", id, verb)` called and resumed; an area or object can start an event. Done when: test room has a talking NPC, a door, an area trigger that starts a test event, and a one-time chest that stays empty on the next visit while a normal one refills.
 - [ ] 6. **Rooms and minimap.** Seamless room edges with transitions, doors, per-twin permanent progress, minimap. Done when: walk across 3 rooms and through a door; progress persists per twin.
 - [ ] 7. **Map maker.** Port the prototype editor into `editor_*.rpy`: rooms browser, mask painting with undo, object placement with property panels, chunk export, playtest; no disk scans inside screens; writes into `game/maps/`. Done when: a new room made in the editor plays in the runtime.
-- [ ] 8. **Combat.** After rpg's combat API: abilities, hits, effects, enemies with basic AI, touch ability buttons. Done when: a test fight works on PC and touch.
+- [ ] 8. **Combat.** After rpg's combat numbers: each twin's kit from rpg ability data (with upgrades), hits, effects, enemies with basic AI and loot tables, one-time bosses, touch ability buttons and aiming that works without a mouse. Signals for quest goals (boss defeated, place reached, thing found). Done when: a test fight works on PC and touch, for each twin.
 - [ ] 9. **Publish.** Print the adventure section for game/code/CLAUDE.md (entering, labels, entity registry, map format).
 
 ## API to publish
-`call adventure(world_id, entry_id)` (and what `_return` holds), `adv.entity_type`, adventure content label naming, the map format v1, signals `adventure_entered`, `adventure_left`.
+`call adventure(world_id, entry_id)` (and what `_return` holds), `adv.entity_type`, adventure content label naming, the map format v1, signals `adventure_entered`, `adventure_left`, and the quest-goal signals (boss defeated, place reached, thing found).

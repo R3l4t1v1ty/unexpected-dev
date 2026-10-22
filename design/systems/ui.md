@@ -12,6 +12,8 @@ Gameplay screens belong to their systems (world view, encyclopedia, inventory, c
 
 **Say screen.** `thought=True` comes from `Character(..., show_thought=True)` (replaces the old `"___"` name prefix). Three skins (Simple, Side-Fade, Fancy) and persistent sliders: opacity, width, height, text size, name and text outlines, each with Reset. New art may come later.
 
+**Choice screen.** A menu choice may carry a requirement, `"Lift the beam" (req=ReqStat("str", 12)):`. Ren'Py passes per-choice arguments to the choice screen as `i.kwargs` (checked in the 8.5 SDK). A choice whose `req` fails shows greyed out and can't be picked, with `req.describe()` beside it ("Strength 12"). This is how stats, items, reputation and relationships gate dialogue options (RPG design, 2026-10-23).
+
 **Components.** Panel frame, buttons, tooltip, confirm dialog, toast queue (`uix.notify(text)`), all styled `uix_*`.
 
 **Preferences.** Adds: reduced motion (`persistent.fx_reduced_motion`, owned by fx), fake loading on/off (`persistent.fx_fake_loading`), language, text size, minigame skip (owned by minigames).

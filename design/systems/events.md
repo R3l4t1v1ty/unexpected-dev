@@ -21,6 +21,11 @@ events.add("hana_2", line="hana_route", requires=ReqEventDone("yui_3"))   # plus
 ```
 (Shape only; decided in events task 2.)
 
+## From the RPG and relationship design (2026-10-23)
+- **Relationship events:** ten per relationship character, one per status. Each unlocks when the twin first reaches its status (`ReqRelReached`) and stays unlocked; they don't chain like a line. Tier rule: one can only be played once the twin has played at least one of that character's events from the tier below (t0 acquaintances; t1 friends/colleague/casual/buddy; t2 lovers/fwb/romantic/platonic; t3 soulmate). The soulmate event can vary with the path taken (`chars.path`).
+- **From adventure mode:** an area or object in a map can start an event.
+- **Gated choices:** choices inside events can carry `req=` with any `Req`; the choice screen greys out the ones that fail and shows the requirement.
+
 ## Hooks into other systems
 - world: `world.register_entry_hook` (auto-start events on entering a location), `world.register_hidden_provider` (hide NPCs busy in pending events), `world.register_marker_provider` (pending events on the map).
 - characters: the event book section on the character page via `chars.register_page_section`.

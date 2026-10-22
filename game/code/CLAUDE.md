@@ -121,10 +121,11 @@ What each folder offers the others. ○ planned (names may change until done) ·
 - ○ HUD panels `rpg_inventory_panel`, `rpg_character_panel`; combat API for adventure
 - Signals: ○ `item_changed(twin, item, count)`, `level_up(twin, level)`, `stat_checked(twin, stat, success)`
 
-**physics** (`import uxphys_math` etc., after init -600)
-- ○ `uxphys_math`: `Vector2`, `Vector2i`, `Rect2`, `Rect2i`, `Transform2D`
-- ○ `uxphys_collide`: `CollisionGrid`, `Body` (`move_and_slide`), `Area`, `raycast`
-- ○ `uxphys_path`: `astar`, `smooth_path`
+**physics** (`import uxphys_math` etc., after init -600; plain .py modules, physics objects are never saved)
+- ✔ `uxphys_math`: `Vector2`, `Vector2i`, `Rect2`, `Rect2i`, `Transform2D` (Godot 4.4), Godot helpers (`lerp`, `move_toward`, `clampf`, `snapped`, `lerp_angle`…)
+- ✔ `uxphys_collide`: `CollisionGrid(columns, rows, cell_size, cells, terrains, outside)` with `Terrain(layer, speed)`: `add`, `remove`, `remove_owner`, `step()` once per tick, `raycast`, `intersect_point`, `intersect_shape`, `is_free`
+- ✔ `uxphys_collide`: `RectShape`, `CircleShape`; `StaticBody`; `Body` (`velocity`, `move_and_slide(delta)`, `move_and_collide`, `get_slide_collision`); `Area` (signals `body_entered`, `body_exited`, `area_entered`, `area_exited`)
+- ✔ `uxphys_path`: `astar`, `smooth_path`, `find_path` (tap-to-move), `segment_clear`
 
 **adventure**
 - ○ `call adventure(world_id, entry_id)`: runs adventure mode until the player leaves; `_return` says how

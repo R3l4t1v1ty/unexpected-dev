@@ -1,0 +1,2037 @@
+## Map editor (developer builds only): collision masks, object placement, playtests.
+##
+## Open it from the main menu's "Map Editor" button, or press F9 while playing
+## to edit the current map. Maps are rooms of worlds (see adventure_world.rpy):
+## the Open screen lists the worlds in game/images/maps, makes new ones, and
+## lists a world's rooms. Make a room by exporting its layer images into a new
+## folder inside the world, named so they sort bottom to top (0_ground.png,
+## 1_roofs.png...), then pick it here and choose a cell size; or make a blank
+## room and export the art later.
+##
+## Two modes, switched with Tab:
+##
+## Collision mode
+##     Left mouse      paint with the selected terrain
+##     Right mouse     paint floor (erase)
+##     B / R / F       brush / rectangle / flood fill
+##     [ ]             brush size
+##     1-9             pick a terrain
+##
+## Objects mode
+##     Pick something in the palette, then click the map to place it, or drag
+##     to place an area (triggers, invisible walls). Right click stops placing.
+##     With nothing picked: click selects, drag moves, the corner handle
+##     resizes an area. Delete removes, Ctrl+D duplicates, arrows nudge
+##     (Shift: a whole cell), N toggles snapping.
+##     Props are the images in game/images/props. Select one and press
+##     "Collision box" (what blocks walking, red) or "Hit box" (what gets hit,
+##     touched and interacted with, blue; defaults to the collision box), then
+##     drag on the map: that box is used by every placement of that image, in
+##     every map (saved in images/maps/props.json). For characters, "Hit box"
+##     sets their feet box (also the "hitbox" property: width, height).
+##
+## World (the panel at the bottom of the sidebar)
+##     Rooms sit next to each other in their world's world.json (see
+##     adventure_world.rpy). "Make this the start room" sets where adventures
+##     begin. "+ Left" etc. create an empty room beside this one and open it; the
+##     rooms around are drawn faintly around the map. During a playtest,
+##     walking off an edge with nothing behind it offers to create a room.
+##     World changes are saved straight away.
+##
+## Everywhere
+##     Space + drag, middle drag   pan;  wheel  zoom;  Home  fit the map
+##     M / G / O       show or hide the mask / grid / object outlines
+##     Ctrl+Z, Ctrl+Y  undo, redo;  Ctrl+S  save
+##     P or F9         playtest: the player appears at the mouse (or at the
+##                     "player_start" marker); F9 again returns here
+##     Esc             stop placing / deselect, then quit
+##
+## Which properties an object type shows comes from its class's
+## editor_properties (see AdventureObject), plus z for everything and
+## solid / movable for anything with an image.
+##
+## Playtests use the map as it is in the editor, saved or not. The player is
+## made by adventure_spawn_player(adventure, position), which the game
+## defines (script.rpy) so playtests get the real sheet, kits and camera.
+##
+## Re-exported layers are picked up when the map is opened. Ren'Py may keep
+## showing an old version of an image it already loaded; Shift+R reloads.
+
+init -860 python:
+
+    import collections
+    import renpy.display as _editor_display
+
+    EDITOR_SIDEBAR = 300
+    EDITOR_STATUS = 26
+
+    # Object types the editor knows without a class: (property, kind, default) rows.
+    EDITOR_BUILTIN_TYPES = {
+        "marker": (),
+        "solid": (("blocks", "text", ""),),
+        "prop": (("image", "image", ""), ("flip", "bool", False)),
+    }
+
+    EDITOR_FACINGS = ("down", "left", "up", "right")
+    EDITOR_TRIGGERS = ("touch", "interact")
+
+    def adventure_editor_hotkey(adventure):
+        """F9 during an adventure: back to the editor from a playtest, else edit the current map."""
+        if getattr(adventure, "playtest", False):
+            adventure.exit("editor")
+        elif adventure.map is not None:
+            renpy.call_in_new_context("adventure_map_editor", adventure.map.path)
+
+    ## Things to pick from
+
+    def editor_image_files(prefix="images/"):
+        """Every image file under a game folder, from disk and archives (map art excluded)."""
+        found = {
+            name for name in renpy.list_files()
+            if name.startswith(prefix) and name.lower().endswith(MAP_IMAGE_EXTENSIONS)
+        }
+        disk = map_disk_path(prefix.rstrip("/"))
+        if os.path.isdir(disk):
+            for root, dirs, files in os.walk(disk):
+                for name in files:
+                    if name.lower().endswith(MAP_IMAGE_EXTENSIONS):
+                        relative = os.path.relpath(os.path.join(root, name), config.gamedir)
+                        found.add(relative.replace("\\", "/"))
+        return sorted(name for name in found if not name.startswith(MAP_ROOT + "/"))
+
+    def editor_sheet_names():
+        """Names of the CharacterSheet / CharacterAnimations variables, for the "sheet" property."""
+        return sorted(
+            name for name, value in globals().items()
+            if isinstance(value, CharacterArt) and not name.startswith("_"))
+
+    def editor_type_names():
+        """Object types to place: the built-in ones, then every @adventure_type.
+
+        "prop" isn't one: props are placed from the PROPS list, with their image.
+        """
+        names = [name for name in EDITOR_BUILTIN_TYPES if name != "prop"]
+        names.extend(sorted(name for name in ADVENTURE_TYPES if name not in EDITOR_BUILTIN_TYPES))
+        return names
+
+    def editor_type_color(type_name):
+        return fallback_color(type_name or "marker")
+
+    def _cell_line(a, b):
+        """Cells on the line from cell a to cell b, both included."""
+        (x0, y0), (x1, y1) = a, b
+        steps = max(abs(x1 - x0), abs(y1 - y0))
+        if not steps:
+            return [a]
+        return [
+            (x0 + int(round((x1 - x0) * i / steps)), y0 + int(round((y1 - y0) * i / steps)))
+            for i in range(steps + 1)
+        ]
+
+    def _json_copy(value):
+        return json.loads(json.dumps(value))
+
+    def _parse_value(text):
+        """A property value typed in the editor: true/false, a number, or text."""
+        text = text.strip()
+        if text.lower() in ("true", "yes"):
+            return True
+        if text.lower() in ("false", "no"):
+            return False
+        try:
+            return int(text)
+        except ValueError:
+            pass
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+    class MapEditor(python_object):
+        """The editor's state: the open MapDocument, tools, selection, view options and undo."""
+
+        TOOLS = (("brush", "Brush", "B"), ("rect", "Rectangle", "R"), ("fill", "Fill", "F"))
+        ZOOMS = (0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
+        CELL_SIZES = (8, 16, 32)
+        UNDO_LIMIT = 100
+
+        def __init__(self, terrains=None):
+            self.terrains = list(terrains or ADVENTURE_TERRAINS)
+            self.doc = None
+            self.dirty = False
+            self.message = ""
+            self.mode = "mask"
+
+            # Collision mode.
+            self.tool = "brush"
+            self.terrain = 1 if len(self.terrains) > 1 else 0
+            self.brush_size = 1
+            self.stroke = None
+
+            # Objects mode. palette is ("type", name), ("prop", image) or None.
+            self.palette = None
+            self.selected = None
+            self.snap = True
+            # Dragging on the map sets the selection's "collision" or "hitbox" box.
+            self.box_edit = None
+            self.props = _json_copy(PropLibrary.get())
+
+            # The text field and choice list popups.
+            self.field = None
+            self.field_text = ""
+            self.choice = None
+
+            self.show_mask = True
+            self.show_grid = True
+            self.show_objects = True
+            self.hidden_layers = set()
+            self._mask_opacity = 0.5
+
+            # The open screen: the world being browsed, a new world's name, and a
+            # folder without map.json waiting for a cell size.
+            self.open_world = None
+            self.new_world_name = ""
+            self.new_folder = None
+            self.new_cell_size = 16
+
+            self.undo_stack = []
+            self.redo_stack = []
+            self.test = None
+            self.view = MapEditorView(self)
+
+            self._mask_surface = None
+            self._mask_texture = None
+            self._colors = None
+            self._layer_images = {}
+            self._visuals = {}
+            self._room_grounds = {}
+
+        def __getstate__(self):
+            # Surfaces, textures and caches can't or needn't be saved; they're rebuilt on demand.
+            state = self.__dict__.copy()
+            state.update(
+                _mask_surface=None, _mask_texture=None, _colors=None, _layer_images={}, _visuals={}, _room_grounds={},
+                undo_stack=[], redo_stack=[], stroke=None)
+            return state
+
+        @property
+        def title(self):
+            if self.doc is None:
+                return "Map editor"
+            return self.doc.folder + (" *" if self.dirty else "")
+
+        def redraw(self):
+            renpy.redraw(self.view, 0)
+
+        ## Opening and saving
+
+        def choose_world(self, folder):
+            self.open_world = folder
+            self.new_folder = None
+            self.message = ""
+
+        def create_world_from_name(self):
+            try:
+                folder = create_world(self.new_world_name)
+            except Exception as e:
+                self.message = str(e)
+                return None
+            self.new_world_name = ""
+            self.choose_world(folder)
+            self.message = "Created world %s. Make a blank room, or export room art into it." % folder
+            return None
+
+        def create_blank_room_here(self):
+            """A blank room in the world being browsed, opened in the editor."""
+            folder = create_blank_room(self.open_world, cell_size=self.new_cell_size)
+            self.open(folder)
+            self.message = "Created %s. Export its art into game/%s/ later." % (folder, folder)
+            return True
+
+        def choose_folder(self, folder):
+            """Opens folder if it has a map; otherwise offers to create one. True once a map is open."""
+            if map_file_exists(folder + "/" + MAP_FILE):
+                self.open(folder)
+                return True
+            if not map_layer_files(folder):
+                self.new_folder = None
+                self.message = "%s has no images yet: export the layers into it first." % folder
+                return None
+            self.new_folder = folder
+            self.message = ""
+            return None
+
+        def create_new(self):
+            doc = MapDocument.create(self.new_folder, self.new_cell_size)
+            self._set_doc(doc)
+            self.dirty = True
+            self.message = "New map: %d layer(s), %dx%d cells. Ctrl+S saves it." % (len(doc.layers), doc.columns, doc.rows)
+            return True
+
+        def open(self, folder):
+            doc = MapDocument.load(folder, self.terrains)
+            changed = doc.sync_layers()
+            self._set_doc(doc)
+            self.dirty = changed
+            self._sync_world_size()
+            self.message = " ".join(doc.notices) or "Opened %s." % doc.folder
+
+        def _sync_world_size(self):
+            """Makes the room's world rectangle match the map's size (its ground image)."""
+            world = WorldLayout.of(self.doc.folder)
+            rect = world.rect(self.doc.folder)
+            if rect is None or rect.size == self.doc.size:
+                return
+            world.resize(self.doc.folder, self.doc.size)
+            world.save()
+            self.doc.notices.append("The world layout now has this room at %dx%d." % tuple(self.doc.size))
+            if world.overlaps(world.rect(self.doc.folder), exclude=self.doc.folder):
+                self.doc.notices.append("It now overlaps another room: move one of them in world.json.")
+
+        def _set_doc(self, doc):
+            self.doc = doc
+            self.open_world = world_of(doc.folder)
+            self.new_folder = None
+            self.hidden_layers = set()
+            self.undo_stack = []
+            self.redo_stack = []
+            self.stroke = None
+            self.palette = None
+            self.selected = None
+            self.box_edit = None
+            self._layer_images = {}
+            self._visuals = {}
+            self._room_grounds = {}
+            for name in doc.layers:
+                map_forget_file(doc.path(name))
+            self._invalidate_mask()
+            self.view.fit()
+
+        def save(self):
+            if self.doc is None:
+                return
+            try:
+                self.doc.save(self.terrains)
+                if self.props != PropLibrary.get():
+                    PropLibrary.save(self.props)
+            except Exception as e:
+                self.message = "Saving failed: %s" % e
+            else:
+                self.dirty = False
+                self.message = "Saved %s." % self.doc.folder
+            self.redraw()
+            renpy.restart_interaction()
+
+        def discard_guard(self, action):
+            """action, behind a "discard unsaved changes?" question when there are any."""
+            if self.dirty and self.doc is not None:
+                return Confirm("Discard unsaved changes to %s?" % self.doc.folder, action)
+            return action
+
+        ## Settings (screen buttons go through these so the view redraws)
+
+        def set(self, name, value):
+            setattr(self, name, value)
+            self.redraw()
+
+        def toggle(self, name):
+            setattr(self, name, not getattr(self, name))
+            self.redraw()
+
+        def set_mode(self, mode):
+            self.mode = mode
+            self.palette = None
+            self.box_edit = None
+            self.redraw()
+
+        def toggle_mode(self):
+            self.set_mode("objects" if self.mode == "mask" else "mask")
+
+        def set_tool(self, tool):
+            """Picks a collision tool, switching to collision mode."""
+            self.set_mode("mask")
+            self.set("tool", tool)
+
+        def set_terrain(self, index):
+            self.set_mode("mask")
+            self.set("terrain", index)
+
+        def toggle_layer(self, index):
+            self.hidden_layers ^= {index}
+            self.redraw()
+
+        def change_brush(self, delta):
+            self.brush_size = max(1, min(32, self.brush_size + delta))
+            self.redraw()
+
+        @property
+        def mask_opacity(self):
+            return self._mask_opacity
+
+        @mask_opacity.setter
+        def mask_opacity(self, value):
+            self._mask_opacity = value
+            self._invalidate_mask()
+            self.redraw()
+
+        def has_transient(self):
+            """Whether Esc has something to cancel before it quits."""
+            return self.palette is not None or self.selected is not None or self.box_edit is not None
+
+        def clear_transient(self):
+            if self.box_edit is not None:
+                self.box_edit = None
+            elif self.palette is not None:
+                self.palette = None
+            else:
+                self.selected = None
+            self.redraw()
+
+        ## Drawing support
+
+        def layer_image(self, index):
+            name = self.doc.layers[index]
+            image = self._layer_images.get(name)
+            if image is None:
+                image = adventure_image(self.doc.path(name), self.doc.size)
+                image = self._layer_images[name] = renpy.displayable(image)
+            return image
+
+        def overlay_colors(self):
+            """RGBA per terrain for the mask overlay; floor is see-through."""
+            if self._colors is None:
+                alpha = int(255 * self._mask_opacity)
+                self._colors = [
+                    tuple(getattr(terrain, "editor_color", terrain.color)[:3]) + (0 if i == 0 else alpha,)
+                    for i, terrain in enumerate(self.terrains)
+                ]
+            return self._colors
+
+        def mask_texture(self):
+            if self._mask_texture is None:
+                if self._mask_surface is None:
+                    doc = self.doc
+                    self._mask_surface = mask_surface(doc.columns, doc.rows, doc.cells, self.overlay_colors())
+                self._mask_texture = _editor_display.draw.load_texture(self._mask_surface)
+            return self._mask_texture
+
+        def _invalidate_mask(self):
+            self._mask_surface = None
+            self._mask_texture = None
+            self._colors = None
+
+        def visual(self, record):
+            """What a placed object looks like (standing on its point), or None for
+            markers, areas and anything else drawn only as an outline."""
+            if record.get("w") and record.get("h"):
+                return None
+            props = record.get("properties") or {}
+            facing = props.get("facing", "down")
+            if facing not in FACING_DIRECTIONS:
+                facing = "down"
+            key = (record.get("type"), props.get("image"), bool(props.get("flip")), props.get("sheet"), facing)
+            if key in self._visuals:
+                return self._visuals[key]
+
+            sheet = globals().get(props.get("sheet") or "")
+            cls = ADVENTURE_TYPES.get(record.get("type"))
+            if isinstance(sheet, CharacterArt) and sheet.preview(facing) is not None:
+                visual = sheet.preview(facing)
+            elif props.get("image"):
+                visual = renpy.displayable(adventure_image(props["image"], (32, 32)))
+                if props.get("flip"):
+                    visual = Transform(visual, xzoom=-1)
+            elif cls is not None and issubclass(cls, AdventureCharacter):
+                w = cls.hitbox_size[0] + 4
+                visual = character_placeholder(cls.placeholder_color, (w, w * 2), facing)
+            else:
+                visual = None
+            self._visuals[key] = visual
+            return visual
+
+        def collision_offsets(self, record):
+            """A record's collision boxes relative to its point: its own, else its image's."""
+            return self._offsets(record, "collision")
+
+        def hitbox_offsets(self, record):
+            """A record's own hit boxes (not a character's feet box), relative to its point."""
+            return self._offsets(record, "hitbox")
+
+        def _offsets(self, record, kind):
+            if kind in record:
+                return record[kind]
+            image = (record.get("properties") or {}).get("image")
+            if image:
+                return self.props.get(image, {}).get(kind, [])
+            return []
+
+        @staticmethod
+        def character_class(record):
+            """The AdventureCharacter class a record makes, or None."""
+            cls = ADVENTURE_TYPES.get(record.get("type"))
+            return cls if cls is not None and issubclass(cls, AdventureCharacter) else None
+
+        def character_hitbox(self, record):
+            """A character record's feet box in the world, or None for other records."""
+            cls = self.character_class(record)
+            if cls is None:
+                return None
+            w, h = (record.get("properties") or {}).get("hitbox") or cls.hitbox_size
+            return feet_hitbox((record.get("x", 0), record.get("y", 0)), (w, h))
+
+        ## Painting
+
+        def brush_cells(self, cell):
+            """The cells a brush stroke at cell covers."""
+            cx, cy = cell
+            size = self.brush_size
+            start = -((size - 1) // 2)
+            return [(cx + start + dx, cy + start + dy) for dy in range(size) for dx in range(size)]
+
+        def stroke_cells(self, cell):
+            """The cells the current tool would paint with the mouse on cell (for the cursor outline)."""
+            stroke = self.stroke
+            if stroke is not None and stroke["tool"] == "rect":
+                return self._rect_cells(stroke["start"], cell)
+            if self.tool == "brush":
+                return self.brush_cells(cell)
+            return [cell]
+
+        @staticmethod
+        def _rect_cells(a, b):
+            (x0, y0), (x1, y1) = a, b
+            return [
+                (x, y)
+                for y in range(min(y0, y1), max(y0, y1) + 1)
+                for x in range(min(x0, x1), max(x0, x1) + 1)
+            ]
+
+        def _paint(self, cells, index):
+            doc = self.doc
+            columns = doc.columns
+            colors = self.overlay_colors()
+            for cx, cy in cells:
+                if 0 <= cx < columns and 0 <= cy < doc.rows:
+                    i = cy * columns + cx
+                    if doc.cells[i] != index:
+                        doc.cells[i] = index
+                        if self._mask_surface is not None:
+                            self._mask_surface.set_at((cx, cy), colors[index])
+            self._mask_texture = None
+
+        def _flood(self, cell, index):
+            doc = self.doc
+            cx, cy = cell
+            columns, rows, cells = doc.columns, doc.rows, doc.cells
+            if not (0 <= cx < columns and 0 <= cy < rows):
+                return
+            target = cells[cy * columns + cx]
+            if target == index:
+                return
+            cells[cy * columns + cx] = index
+            queue = collections.deque([(cx, cy)])
+            while queue:
+                x, y = queue.popleft()
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < columns and 0 <= ny < rows and cells[ny * columns + nx] == target:
+                        cells[ny * columns + nx] = index
+                        queue.append((nx, ny))
+            self._invalidate_mask()
+
+        def begin_stroke(self, cell, erase=False):
+            if self.doc is None:
+                return
+            index = 0 if erase else self.terrain
+            self.begin_change()
+            self.stroke = {"tool": self.tool, "index": index, "start": cell, "last": cell}
+            if self.tool == "brush":
+                self._paint(self.brush_cells(cell), index)
+            elif self.tool == "fill":
+                self._flood(cell, index)
+                self.end_stroke(cell)
+            self.redraw()
+
+        def continue_stroke(self, cell):
+            stroke = self.stroke
+            if stroke is None:
+                return
+            if stroke["tool"] == "brush" and cell != stroke["last"]:
+                cells = []
+                for step in _cell_line(stroke["last"], cell):
+                    cells.extend(self.brush_cells(step))
+                self._paint(cells, stroke["index"])
+            stroke["last"] = cell
+            self.redraw()
+
+        def end_stroke(self, cell=None):
+            stroke = self.stroke
+            if stroke is None:
+                return
+            if stroke["tool"] == "rect":
+                self._paint(self._rect_cells(stroke["start"], cell if cell is not None else stroke["last"]), stroke["index"])
+            self.stroke = None
+            self.end_change()
+
+        ## Undo: every change is bracketed by begin_change() / end_change().
+
+        def _snapshot(self):
+            return (bytes(self.doc.cells), _json_copy(self.doc.objects), _json_copy(self.props))
+
+        def begin_change(self):
+            self.undo_stack.append(self._snapshot())
+            if len(self.undo_stack) > self.UNDO_LIMIT:
+                self.undo_stack.pop(0)
+
+        def end_change(self):
+            """Keeps the undo step if something changed, else drops it."""
+            if self.undo_stack and self.undo_stack[-1] == self._snapshot():
+                self.undo_stack.pop()
+            else:
+                self.dirty = True
+                self.redo_stack = []
+            self.redraw()
+            renpy.restart_interaction()
+
+        def undo(self):
+            self._swap(self.undo_stack, self.redo_stack, "Undone.")
+
+        def redo(self):
+            self._swap(self.redo_stack, self.undo_stack, "Redone.")
+
+        def _swap(self, source, target, message):
+            if self.doc is None or self.stroke is not None or not source:
+                return
+            target.append(self._snapshot())
+            cells, objects, props = source.pop()
+            self.doc.cells[:] = cells
+            self.doc.objects = objects
+            self.props = props
+            if self.selected is not None and self.selected >= len(objects):
+                self.selected = None
+            self._invalidate_mask()
+            self.dirty = True
+            self.message = message
+            self.redraw()
+            renpy.restart_interaction()
+
+        ## Objects
+
+        @property
+        def selected_record(self):
+            if self.doc is None or self.selected is None or self.selected >= len(self.doc.objects):
+                return None
+            return self.doc.objects[self.selected]
+
+        def select(self, index):
+            self.selected = index
+            self.box_edit = None
+            self.redraw()
+            renpy.restart_interaction()
+
+        def set_palette(self, item):
+            self.palette = None if self.palette == item else item
+            self.selected = None
+            self.box_edit = None
+            self.redraw()
+
+        def unique_name(self, base):
+            names = {record.get("name") for record in self.doc.objects}
+            n = 1
+            while "%s_%d" % (base, n) in names:
+                n += 1
+            return "%s_%d" % (base, n)
+
+        def snap_point(self, point):
+            """A placement point, snapped to half cells when snapping is on."""
+            step = self.doc.cell_size / 2.0 if self.snap else 1
+            return [int(math.floor(point[0] / step + 0.5) * step), int(math.floor(point[1] / step + 0.5) * step)]
+
+        def snap_edge(self, value):
+            """An area edge, snapped to cell edges when snapping is on."""
+            step = self.doc.cell_size if self.snap else 1
+            return int(math.floor(value / step + 0.5) * step)
+
+        def place(self, start, end, area):
+            """Places the palette item: a point at start, or an area from start to end."""
+            kind, value = self.palette
+            if kind == "prop":
+                base = os.path.splitext(os.path.basename(value))[0]
+                record = {"type": "prop", "properties": {"image": value}}
+            else:
+                base = value
+                record = {"type": value}
+            record["name"] = self.unique_name(base)
+
+            cell = self.doc.cell_size
+            if area or value == "solid":
+                # Snapped, the area covers every cell the drag touched; a click makes one cell.
+                step = cell if self.snap else 1
+                left, right = sorted((start[0], end[0]))
+                top, bottom = sorted((start[1], end[1]))
+                x0 = int(math.floor(left / step) * step)
+                y0 = int(math.floor(top / step) * step)
+                x1 = max(x0 + step, int(math.ceil(right / step) * step))
+                y1 = max(y0 + step, int(math.ceil(bottom / step) * step))
+                if not area:
+                    x1, y1 = x0 + cell, y0 + cell
+                record.update(x=x0, y=y0, w=x1 - x0, h=y1 - y0)
+            else:
+                record["x"], record["y"] = self.snap_point(start)
+
+            self.begin_change()
+            self.doc.objects.append(record)
+            self.selected = len(self.doc.objects) - 1
+            self.end_change()
+
+        def move_selected(self, origin, delta):
+            """Moves the selection so its x, y is origin + delta (origin: its x, y when the drag began)."""
+            record = self.selected_record
+            if record is None:
+                return
+            target = (origin[0] + delta[0], origin[1] + delta[1])
+            if record.get("w") and record.get("h"):
+                record["x"], record["y"] = self.snap_edge(target[0]), self.snap_edge(target[1])
+            else:
+                record["x"], record["y"] = self.snap_point(target)
+            self.redraw()
+
+        def resize_selected(self, corner):
+            """Moves a selected area's bottom-right corner to a world point."""
+            record = self.selected_record
+            if record is None or not (record.get("w") and record.get("h")):
+                return
+            minimum = self.doc.cell_size if self.snap else 2
+            record["w"] = max(minimum, self.snap_edge(corner[0]) - record["x"])
+            record["h"] = max(minimum, self.snap_edge(corner[1]) - record["y"])
+            self.redraw()
+
+        def nudge(self, dx, dy, cells=False):
+            record = self.selected_record
+            if record is None:
+                return
+            step = self.doc.cell_size if cells else 1
+            self.begin_change()
+            record["x"] = record.get("x", 0) + dx * step
+            record["y"] = record.get("y", 0) + dy * step
+            self.end_change()
+
+        def delete_selected(self):
+            if self.selected_record is None:
+                return
+            self.begin_change()
+            del self.doc.objects[self.selected]
+            self.selected = None
+            self.box_edit = None
+            self.end_change()
+
+        def duplicate_selected(self):
+            record = self.selected_record
+            if record is None:
+                return
+            copy = _json_copy(record)
+            base = record.get("name", "").rsplit("_", 1)[0] or record.get("type") or "object"
+            copy["name"] = self.unique_name(base)
+            copy["x"] = copy.get("x", 0) + self.doc.cell_size
+            copy["y"] = copy.get("y", 0) + self.doc.cell_size
+            self.begin_change()
+            self.doc.objects.append(copy)
+            self.selected = len(self.doc.objects) - 1
+            self.end_change()
+
+        ## Object properties
+
+        def schema(self, record):
+            """(property, kind, default) rows the properties panel shows for record."""
+            type_name = record.get("type", "")
+            if type_name in EDITOR_BUILTIN_TYPES:
+                rows = list(EDITOR_BUILTIN_TYPES[type_name])
+            else:
+                cls = ADVENTURE_TYPES.get(type_name)
+                rows = list(getattr(cls, "editor_properties", ()))
+            character = self.character_class(record)
+            if character is not None:
+                rows.append(("hitbox", "size", list(character.hitbox_size)))
+            if type_name not in ("marker", "solid"):
+                rows.append(("z", "number", 0))
+                rows.append(("permanent", "bool", False))
+            if (record.get("properties") or {}).get("image"):
+                rows.extend((("solid", "bool", True), ("movable", "bool", False)))
+            return rows
+
+        def extra_properties(self, record):
+            """Properties set on record that its schema doesn't list."""
+            known = {row[0] for row in self.schema(record)}
+            return sorted((k, v) for k, v in (record.get("properties") or {}).items() if k not in known)
+
+        @staticmethod
+        def property_value(record, name, default=""):
+            return (record.get("properties") or {}).get(name, default)
+
+        def set_property(self, name, value, default=None):
+            """Sets a property on the selection; empty text or the default removes it."""
+            record = self.selected_record
+            if record is None:
+                return
+            self.begin_change()
+            properties = record.setdefault("properties", {})
+            if value == "" or value is None or (default is not None and value == default):
+                properties.pop(name, None)
+            else:
+                properties[name] = value
+            if not properties:
+                del record["properties"]
+            self.end_change()
+
+        def cycle_facing(self, name):
+            self.cycle_property(name, EDITOR_FACINGS)
+
+        def cycle_property(self, name, options):
+            """Steps a property through options; the first option is the default."""
+            current = self.property_value(self.selected_record, name, options[0])
+            index = options.index(current) if current in options else 0
+            self.set_property(name, options[(index + 1) % len(options)], options[0])
+
+        def field_action(self, target, kind, title):
+            """A screen action opening the text field popup for target:
+            ("prop", name), ("name",), ("position",), ("size",) or ("new",)."""
+            return [Function(self.edit_field, target, kind, title), Show("adventure_editor_field", editor=self)]
+
+        def edit_field(self, target, kind, title):
+            record = self.selected_record
+            self.field = {"target": target, "kind": kind, "title": title}
+            if target[0] == "prop":
+                value = self.property_value(record, target[1], "")
+                if isinstance(value, (list, tuple)):
+                    value = ", ".join(str(v) for v in value)
+                self.field_text = "" if value is None else str(value)
+            elif target[0] == "name":
+                self.field_text = record.get("name", "")
+            elif target[0] == "position":
+                self.field_text = "%s, %s" % (record.get("x", 0), record.get("y", 0))
+            elif target[0] == "size":
+                self.field_text = "%s, %s" % (record.get("w", 0), record.get("h", 0))
+            else:
+                self.field_text = ""
+
+        def commit_field(self):
+            field = self.field
+            record = self.selected_record
+            self.field = None
+            if field is None or record is None:
+                return
+            target, kind, text = field["target"], field["kind"], self.field_text.strip()
+
+            if target[0] == "prop":
+                if kind == "size" and text:
+                    try:
+                        size = [int(round(float(part))) for part in text.strip("[]() ").replace(" ", "").split(",")]
+                    except ValueError:
+                        size = []
+                    if len(size) != 2 or min(size) < 1:
+                        self.message = "%s takes a width and height, like 12, 8." % target[1]
+                        return
+                    self.set_property(target[1], size)
+                elif kind == "number" and text:
+                    value = _parse_value(text)
+                    if isinstance(value, str):
+                        self.message = "%s must be a number." % target[1]
+                        return
+                    self.set_property(target[1], value)
+                else:
+                    self.set_property(target[1], text)
+                if kind == "label" and text and not renpy.has_label(text):
+                    self.message = "There's no label called %s yet." % text
+            elif target[0] == "name":
+                self.begin_change()
+                record["name"] = text
+                self.end_change()
+                if text and sum(1 for r in self.doc.objects if r.get("name") == text) > 1:
+                    self.message = "Another object is also called %s." % text
+            elif target[0] in ("position", "size"):
+                try:
+                    a, b = [int(round(float(part))) for part in text.replace(" ", "").split(",")]
+                except ValueError:
+                    self.message = "Type two numbers, like 120, 64."
+                    return
+                keys = ("x", "y") if target[0] == "position" else ("w", "h")
+                self.begin_change()
+                record[keys[0]], record[keys[1]] = a, b
+                self.end_change()
+            elif target[0] == "new":
+                name, sep, value = text.partition("=")
+                if not sep or not name.strip():
+                    self.message = "Type a property as name = value."
+                    return
+                self.set_property(name.strip(), _parse_value(value))
+
+        def choice_action(self, name, title, options):
+            """A screen action opening the choice list popup for property name."""
+            return [Function(self.edit_choice, name, title, options), Show("adventure_editor_choice", editor=self)]
+
+        def edit_choice(self, name, title, options):
+            self.choice = {"name": name, "title": title, "options": options}
+
+        def commit_choice(self, value):
+            choice = self.choice
+            self.choice = None
+            if choice is not None:
+                self.set_property(choice["name"], value)
+
+        ## Collision and hit boxes
+
+        def toggle_box_edit(self, kind):
+            self.box_edit = None if self.box_edit == kind else kind
+            self.redraw()
+
+        def set_box(self, kind, start, end):
+            """Sets the selection's "collision" or "hitbox" box from a world rectangle.
+
+            Props store it for their image (every placement); objects with their
+            own box, or without an image, store it on themselves. For characters
+            a hit box is their feet box, so only its size is kept.
+            """
+            record = self.selected_record
+            if record is None or kind is None:
+                return
+            x0, x1 = sorted((start[0], end[0]))
+            y0, y1 = sorted((start[1], end[1]))
+            if x1 - x0 < 1 or y1 - y0 < 1:
+                return
+            if kind == "hitbox" and self.character_class(record) is not None:
+                self.set_property("hitbox", [int(round(x1 - x0)), int(round(y1 - y0))])
+                return
+            px, py = record.get("x", 0), record.get("y", 0)
+            box = [int(round(x0 - px)), int(round(y0 - py)), int(round(x1 - x0)), int(round(y1 - y0))]
+            image = (record.get("properties") or {}).get("image")
+            self.begin_change()
+            if kind in record or not image:
+                record[kind] = [box]
+            else:
+                self.props.setdefault(image, {})[kind] = [box]
+            self.end_change()
+
+        def clear_box(self, kind):
+            record = self.selected_record
+            if record is None:
+                return
+            if kind == "hitbox" and self.character_class(record) is not None:
+                self.set_property("hitbox", None)
+                return
+            image = (record.get("properties") or {}).get("image")
+            self.begin_change()
+            if kind in record:
+                del record[kind]
+            elif image:
+                entry = self.props.get(image)
+                if entry is not None:
+                    entry.pop(kind, None)
+                    if not entry:
+                        del self.props[image]
+            self.end_change()
+
+        def set_collision_box(self, start, end):
+            self.set_box("collision", start, end)
+
+        def clear_collision_box(self):
+            self.clear_box("collision")
+
+        def has_box(self, record, kind):
+            if kind == "hitbox" and self.character_class(record) is not None:
+                return bool((record.get("properties") or {}).get("hitbox"))
+            return bool(self._offsets(record, kind))
+
+        ## World
+
+        @property
+        def world(self):
+            """The WorldLayout of the open room."""
+            return WorldLayout.of(self.doc.folder)
+
+        @property
+        def world_rect(self):
+            """This room's rectangle in the world layout, or None."""
+            return self.world.rect(self.doc.folder) if self.doc is not None else None
+
+        @property
+        def is_start_room(self):
+            start = self.world.start
+            return start is not None and start["room"] == self.doc.folder
+
+        def make_start_room(self):
+            world = self.world
+            world.set_start(self.doc.folder, "player_start")
+            world.save()
+            markers = map_marker_names(self.doc.folder) or [r.get("name") for r in self.doc.objects if r.get("name") == "player_start"]
+            note = "" if "player_start" in markers else " Place a marker called player_start (else the room's centre is used)."
+            self.message = "Adventures in %s now start here.%s" % (world.name, note)
+            self.redraw()
+
+        def neighbour_rooms(self):
+            return self.world.neighbours(self.doc.folder)
+
+        def world_rooms(self):
+            """Names of the rooms (with a map) in this world, for door targets."""
+            return [
+                self.world.local_name(folder) for folder, has_map in world_room_folders(world_of(self.doc.folder))
+                if has_map]
+
+        def add_to_world(self):
+            world = self.world
+            world.add(self.doc.folder, Rect2(world.free_spot(self.doc.size), self.doc.size))
+            world.save()
+            self.message = "Added %s to the world." % self.doc.folder
+            self.redraw()
+
+        def remove_from_world(self):
+            world = self.world
+            world.remove(self.doc.folder)
+            world.save()
+            self.message = "Removed %s from the world. Its folder is untouched." % self.doc.folder
+            self.redraw()
+
+        def create_neighbour(self, side):
+            """Creates an empty room on `side` of this one and opens it."""
+            folder = create_neighbour_room(
+                self.doc.folder, side, self.doc.size, self.doc.cell_size, self.doc.background)
+            if folder is None:
+                self.message = "Another room is already there."
+                self.redraw()
+                return
+            self.open(folder)
+            self.message = "Created %s. Export its art into game/%s/." % (folder, folder)
+
+        def open_room(self, path):
+            self.open(path)
+
+        def other_rooms(self):
+            """(folder, rect relative to this room) for every other room in the world."""
+            here = self.world_rect
+            if here is None:
+                return []
+            return [
+                (path, Rect2(rect.position - here.position, rect.size))
+                for path, rect in self.world.rooms.items() if path != self.doc.folder
+            ]
+
+        def room_ground(self, path):
+            """(ground image or None, background colour or None) of another room, for drawing it faintly."""
+            if path not in self._room_grounds:
+                ground = background = None
+                try:
+                    with map_open_file(path + "/" + MAP_FILE) as f:
+                        data = json.loads(f.read().decode("utf-8"))
+                    background = data.get("background")
+                    if data.get("layers"):
+                        ground = renpy.displayable(adventure_image(path + "/" + data["layers"][0], data.get("size", (32, 32))))
+                except Exception:
+                    pass
+                self._room_grounds[path] = (ground, background)
+            return self._room_grounds[path]
+
+        ## Playtest
+
+        def spawn_point(self):
+            """The mouse's map position if it's over the map, else player_start, else the centre."""
+            view = self.view
+            if view.mouse is not None:
+                point = view.to_world(view.mouse)
+                if point in Rect2(Vector2(), self.doc.size):
+                    return point
+            for record in self.doc.objects:
+                if record.get("name") == "player_start":
+                    return Vector2(record.get("x", 0), record.get("y", 0))
+            return self.doc.size / 2
+
+        def start_playtest(self):
+            adventure = AdventureMode()
+            adventure.playtest = True
+            adventure.world = world_of(self.doc.folder)
+            adventure.character = adventure_character_key()
+            adventure.set_map(AdventureMap(self.doc, self.terrains, self.props))
+            adventure_spawn_player(adventure, self.spawn_point())
+            self.test = adventure
+
+    class MapEditorView(renpy.Displayable):
+        """The editor's canvas: draws the map, objects, mask and grid; pans, zooms, paints and places."""
+
+        GRID_COLOR = "#ffffff1c"
+        BORDER_COLOR = "#ffffff66"
+        SELECTED_COLOR = "#ffd479"
+        COLLISION_COLOR = "#ff5a5a"
+        HITBOX_COLOR = "#4ad7ff"
+        # Screen pixels a press has to move before it counts as a drag.
+        DRAG_THRESHOLD = 4
+        HANDLE = 8
+
+        def __init__(self, editor, **properties):
+            super().__init__(**properties)
+            self.editor = editor
+            # World point at the view's top-left corner, and screen pixels per world pixel.
+            self.origin = Vector2()
+            self.zoom = 1.0
+            self.mouse = None
+            self.space = False
+            self._pan_from = None
+            self._pan_origin = None
+            # An object drag: (kind, start world point, start screen point, extra).
+            self._drag = None
+            # (object index, world Rect2) from the last render, topmost last.
+            self._hits = []
+            self._solids = {}
+            self._texts = {}
+
+        @property
+        def width(self):
+            return config.screen_width - EDITOR_SIDEBAR
+
+        @property
+        def height(self):
+            return config.screen_height
+
+        ## Coordinates
+
+        def to_world(self, point):
+            return self.origin + Vector2(*point) / self.zoom
+
+        def to_screen(self, point):
+            return (Vector2(*point) - self.origin) * self.zoom
+
+        def cell_at(self, point):
+            world = self.to_world(point)
+            size = self.editor.doc.cell_size
+            return (int(world.x // size), int(world.y // size))
+
+        def fit(self):
+            """Zooms so the whole map fits, and centres it."""
+            doc = self.editor.doc
+            if doc is None:
+                return
+            room = Vector2(self.width - 40, self.height - EDITOR_STATUS - 40)
+            fitting = [z for z in MapEditor.ZOOMS if doc.size.x * z <= room.x and doc.size.y * z <= room.y]
+            self.zoom = fitting[-1] if fitting else MapEditor.ZOOMS[0]
+            self.origin = doc.size / 2 - Vector2(self.width, self.height - EDITOR_STATUS) / (2 * self.zoom)
+            renpy.redraw(self, 0)
+
+        def zoom_step(self, steps, at):
+            """Zooms in (steps > 0) or out, keeping the map point under `at` still."""
+            zooms = MapEditor.ZOOMS
+            index = min(range(len(zooms)), key=lambda i: abs(zooms[i] - self.zoom))
+            index = max(0, min(len(zooms) - 1, index + steps))
+            world = self.to_world(at)
+            self.zoom = zooms[index]
+            self.origin = world - Vector2(*at) / self.zoom
+
+        def hit_test(self, world):
+            """The index of the topmost object at a world point, or None."""
+            for index, rect in reversed(self._hits):
+                if world in rect:
+                    return index
+            return None
+
+        def on_handle(self, screen_point):
+            """Whether a screen point is on the selected area's resize handle."""
+            record = self.editor.selected_record
+            if record is None or not (record.get("w") and record.get("h")):
+                return False
+            corner = self.to_screen((record["x"] + record["w"], record["y"] + record["h"]))
+            return abs(screen_point[0] - corner.x) <= self.HANDLE and abs(screen_point[1] - corner.y) <= self.HANDLE
+
+        ## Drawing helpers
+
+        def _solid(self, color, width, height, st, at):
+            solid = self._solids.get(color)
+            if solid is None:
+                solid = self._solids[color] = Solid(color)
+            return renpy.render(solid, max(1, int(width)), max(1, int(height)), st, at)
+
+        def _box(self, rv, rect, st, at, fill=None, outline=None):
+            """Draws a screen-space (x, y, w, h) box, filled and/or outlined."""
+            x, y, w, h = [int(v) for v in rect]
+            if fill:
+                rv.blit(self._solid(fill, w, h, st, at), (x, y))
+            if outline:
+                rv.blit(self._solid(outline, w, 1, st, at), (x, y))
+                rv.blit(self._solid(outline, w, 1, st, at), (x, y + h - 1))
+                rv.blit(self._solid(outline, 1, h, st, at), (x, y))
+                rv.blit(self._solid(outline, 1, h, st, at), (x + w - 1, y))
+
+        def _world_box(self, rv, rect, st, at, fill=None, outline=None, grow=0):
+            p = self.to_screen(rect.position)
+            size = rect.size * self.zoom
+            box = (p.x - grow, p.y - grow, max(2, size.x) + 2 * grow, max(2, size.y) + 2 * grow)
+            self._box(rv, box, st, at, fill=fill, outline=outline)
+
+        def _text(self, rv, string, pos, st, at, size=13, color="#e8e8e8"):
+            key = (string, size, color)
+            text = self._texts.get(key)
+            if text is None:
+                if len(self._texts) > 500:
+                    self._texts.clear()
+                text = self._texts[key] = Text(string, size=size, color=color, outlines=[(1, "#000", 0, 0)], substitute=False)
+            surface = renpy.render(text, self.width, 100, st, at)
+            rv.blit(surface, pos)
+            return surface.get_size()
+
+        def _zoomed(self, w, h):
+            """A Render that draws its children at the view's zoom (positions stay in screen pixels)."""
+            rv = renpy.Render(w, h)
+            rv.zoom(self.zoom, self.zoom)
+            if self.zoom >= 1:
+                rv.add_property("texture_scaling", "nearest")
+            return rv
+
+        ## Displayable
+
+        def render(self, width, height, st, at):
+            w, h = self.width, self.height
+            editor = self.editor
+            doc = editor.doc
+            rv = renpy.Render(w, h)
+            rv.blit(self._solid("#1b1d21", w, h, st, at), (0, 0))
+            if doc is None:
+                return rv
+
+            zoom = self.zoom
+            top_left = self.to_screen((0, 0))
+            map_screen = Rect2(top_left, doc.size * zoom)
+            visible = map_screen & Rect2(0, 0, w, h)
+
+            self._draw_other_rooms(rv, w, h, st, at)
+
+            if visible:
+                backdrop = self._solid(doc.background or "#2a2d33", visible.size.x, visible.size.y, st, at)
+                rv.blit(backdrop, (visible.position.x, visible.position.y))
+
+            # Like the game: the first layer, then the objects, then the other layers.
+            if doc.layers and 0 not in editor.hidden_layers:
+                ground = self._zoomed(w, h)
+                surface = renpy.render(editor.layer_image(0), int(doc.size.x), int(doc.size.y), st, at)
+                ground.subpixel_blit(surface, (top_left.x, top_left.y))
+                rv.blit(ground, (0, 0))
+
+            self._hits = []
+            rv.blit(self._draw_objects(w, h, st, at), (0, 0))
+
+            upper = self._zoomed(w, h)
+            for i in range(1, len(doc.layers)):
+                if i not in editor.hidden_layers:
+                    surface = renpy.render(editor.layer_image(i), int(doc.size.x), int(doc.size.y), st, at)
+                    upper.subpixel_blit(surface, (top_left.x, top_left.y))
+            rv.blit(upper, (0, 0))
+
+            step = doc.cell_size * zoom
+            if editor.show_mask:
+                mask = renpy.Render(w, h)
+                mask.zoom(step, step)
+                mask.add_property("texture_scaling", "nearest")
+                mask.subpixel_blit(editor.mask_texture(), (top_left.x, top_left.y))
+                rv.blit(mask, (0, 0))
+
+            if editor.show_grid and step >= 6 and visible:
+                self._draw_grid(rv, doc, top_left, step, visible, st, at)
+
+            border = (top_left.x - 1, top_left.y - 1, map_screen.size.x + 2, map_screen.size.y + 2)
+            self._box(rv, border, st, at, outline=self.BORDER_COLOR)
+
+            self._draw_gizmos(rv, doc, st, at)
+
+            if self.mouse is not None and self._pan_from is None:
+                if editor.mode == "mask":
+                    self._draw_cursor(rv, doc, step, st, at)
+                else:
+                    self._draw_object_cursor(rv, st, at)
+
+            self._draw_status(rv, doc, w, h, st, at)
+            return rv
+
+        def _draw_other_rooms(self, rv, w, h, st, at):
+            """The rooms around this one in the world layout, drawn faintly with their names."""
+            screen = Rect2(0, 0, w, h)
+            for path, rect in self.editor.other_rooms():
+                p = self.to_screen(rect.position)
+                on_screen = Rect2(p, rect.size * self.zoom)
+                if not on_screen.intersects(screen):
+                    continue
+                ground, background = self.editor.room_ground(path)
+                shown = on_screen & screen
+                fill = tuple(Color(background or "#2a2d33")[:3]) + (96,)
+                self._box(rv, (shown.position.x, shown.position.y, shown.size.x, shown.size.y), st, at, fill=fill)
+                if ground is not None:
+                    faint = self._zoomed(w, h)
+                    surface = renpy.render(Transform(ground, alpha=0.35), int(rect.size.x), int(rect.size.y), st, at)
+                    faint.subpixel_blit(surface, (p.x, p.y))
+                    rv.blit(faint, (0, 0))
+                self._box(rv, (p.x, p.y, on_screen.size.x, on_screen.size.y), st, at, outline="#ffffff40")
+                label = (max(p.x, 0) + 6, max(p.y, 0) + 6)
+                self._text(rv, path, label, st, at, size=13, color="#ffffffa0")
+
+        def _draw_objects(self, w, h, st, at):
+            """Draws objects with an appearance, sorted like the game, and records
+            where every object is for clicking."""
+            editor = self.editor
+            areas, sprites, points = [], [], []
+            for index, record in enumerate(editor.doc.objects):
+                x, y = record.get("x", 0), record.get("y", 0)
+                if record.get("w") and record.get("h"):
+                    areas.append((index, Rect2(x, y, record["w"], record["h"])))
+                    continue
+                visual = editor.visual(record)
+                if visual is None:
+                    half = 6 / self.zoom
+                    points.append((index, Rect2(x - half, y - half, 2 * half, 2 * half)))
+                else:
+                    z = editor.property_value(record, "z", 0) or 0
+                    sprites.append(((z, y), index, visual, x, y))
+
+            layer = self._zoomed(w, h)
+            sprites.sort(key=lambda item: item[0])
+            for _, index, visual, x, y in sprites:
+                surface = renpy.render(visual, config.screen_width, config.screen_height, st, at)
+                sw, sh = surface.get_size()
+                world = Rect2(x - sw / 2.0, y - sh, sw, sh)
+                p = self.to_screen(world.position)
+                layer.subpixel_blit(surface, (p.x, p.y))
+                areas.append((index, world))
+
+            # Click order: areas under sprites under markers.
+            self._hits = areas + points
+            return layer
+
+        def _draw_gizmos(self, rv, doc, st, at):
+            editor = self.editor
+            selected = editor.selected
+            rects = dict(self._hits)
+            for index, record in enumerate(doc.objects):
+                kind = record.get("type") or "marker"
+                color = editor_type_color(kind)
+                is_area = record.get("w") and record.get("h")
+                has_visual = not is_area and editor.visual(record) is not None
+
+                if editor.show_objects or index == selected:
+                    px, py = record.get("x", 0), record.get("y", 0)
+                    for bx, by, bw, bh in editor.collision_offsets(record):
+                        rect = Rect2(px + bx, py + by, bw, bh)
+                        self._world_box(rv, rect, st, at, fill=self.COLLISION_COLOR + "33", outline=self.COLLISION_COLOR)
+                    for bx, by, bw, bh in editor.hitbox_offsets(record):
+                        self._world_box(rv, Rect2(px + bx, py + by, bw, bh), st, at, outline=self.HITBOX_COLOR)
+                    feet = editor.character_hitbox(record)
+                    if feet is not None:
+                        self._world_box(rv, feet, st, at, fill=self.HITBOX_COLOR + "33", outline=self.HITBOX_COLOR)
+
+                if editor.show_objects and is_area:
+                    self._world_box(rv, rects[index], st, at, fill=color + "40", outline=color)
+                elif editor.show_objects and not has_visual:
+                    p = self.to_screen((record.get("x", 0), record.get("y", 0)))
+                    self._box(rv, (p.x - 4, p.y - 4, 8, 8), st, at, fill=color, outline="#000")
+
+                if index == selected:
+                    self._world_box(rv, rects[index], st, at, outline=self.SELECTED_COLOR, grow=1)
+                    if is_area:
+                        corner = self.to_screen(rects[index].end)
+                        handle = self.HANDLE
+                        knob = (corner.x - handle / 2, corner.y - handle / 2, handle, handle)
+                        self._box(rv, knob, st, at, fill=self.SELECTED_COLOR, outline="#000")
+
+                if (editor.show_objects and not has_visual) or index == selected:
+                    p = self.to_screen(rects[index].position)
+                    self._text(rv, record.get("name") or kind, (p.x + 2, p.y - 16), st, at, size=12)
+
+        def _draw_grid(self, rv, doc, top_left, step, visible, st, at):
+            x0, y0 = visible.position
+            x1, y1 = visible.end
+            first_column = max(0, int((x0 - top_left.x) // step))
+            last_column = min(doc.columns, int((x1 - top_left.x) // step) + 1)
+            for column in range(first_column, last_column + 1):
+                rv.blit(self._solid(self.GRID_COLOR, 1, y1 - y0, st, at), (top_left.x + column * step, y0))
+            first_row = max(0, int((y0 - top_left.y) // step))
+            last_row = min(doc.rows, int((y1 - top_left.y) // step) + 1)
+            for row in range(first_row, last_row + 1):
+                rv.blit(self._solid(self.GRID_COLOR, x1 - x0, 1, st, at), (x0, top_left.y + row * step))
+
+        def _draw_cursor(self, rv, doc, step, st, at):
+            cells = self.editor.stroke_cells(self.cell_at(self.mouse))
+            xs = [c[0] for c in cells]
+            ys = [c[1] for c in cells]
+            p = self.to_screen((min(xs) * doc.cell_size, min(ys) * doc.cell_size))
+            box = (p.x, p.y, (max(xs) - min(xs) + 1) * step, (max(ys) - min(ys) + 1) * step)
+            self._box(rv, (box[0] - 1, box[1] - 1, box[2] + 2, box[3] + 2), st, at, outline="#000000aa")
+            self._box(rv, box, st, at, outline="#ffffffdd")
+
+        def _draw_object_cursor(self, rv, st, at):
+            """The placement ghost, or the rectangle being dragged out."""
+            editor = self.editor
+            world = self.to_world(self.mouse)
+            drag = self._drag
+            if drag is not None and drag[0] in ("place", "box") and self._dragged():
+                start = drag[1]
+                corner = Vector2(min(start.x, world.x), min(start.y, world.y))
+                rect = Rect2(corner, Vector2(abs(world.x - start.x), abs(world.y - start.y)))
+                color = "#ffffff"
+                if drag[0] == "box":
+                    color = self.HITBOX_COLOR if editor.box_edit == "hitbox" else self.COLLISION_COLOR
+                self._world_box(rv, rect, st, at, fill=color + "30", outline=color)
+                return
+            if editor.palette is None or drag is not None:
+                return
+            kind, value = editor.palette
+            record = {"type": "prop", "properties": {"image": value}} if kind == "prop" else {"type": value}
+            visual = editor.visual(record)
+            x, y = editor.snap_point(world)
+            if visual is None:
+                p = self.to_screen((x, y))
+                self._box(rv, (p.x - 4, p.y - 4, 8, 8), st, at, outline="#ffffff")
+                return
+            surface = renpy.render(Transform(visual, alpha=0.5), config.screen_width, config.screen_height, st, at)
+            sw, sh = surface.get_size()
+            ghost = self._zoomed(self.width, self.height)
+            p = self.to_screen((x - sw / 2.0, y - sh))
+            ghost.subpixel_blit(surface, (p.x, p.y))
+            rv.blit(ghost, (0, 0))
+
+        def _draw_status(self, rv, doc, w, h, st, at):
+            editor = self.editor
+            if editor.message:
+                self._text(rv, editor.message, (12, 10), st, at, size=14, color="#ffd479")
+            if editor.box_edit == "collision":
+                self._text(rv, "Drag the collision box (what blocks walking). Esc when done.", (12, 32), st, at, size=14, color="#ff9a9a")
+            elif editor.box_edit == "hitbox":
+                self._text(rv, "Drag the hit box (what gets hit and touched). Esc when done.", (12, 32), st, at, size=14, color="#9ae6ff")
+
+            rv.blit(self._solid("#101215", w, EDITOR_STATUS, st, at), (0, h - EDITOR_STATUS))
+            parts = ["%dx%d px  %dx%d cells of %d px" % (doc.size.x, doc.size.y, doc.columns, doc.rows, doc.cell_size)]
+            if self.mouse is not None:
+                world = self.to_world(self.mouse)
+                cx, cy = self.cell_at(self.mouse)
+                where = "%d, %d  cell %d, %d" % (world.x, world.y, cx, cy)
+                if 0 <= cx < doc.columns and 0 <= cy < doc.rows:
+                    where += "  " + editor.terrains[doc.cells[cy * doc.columns + cx]].name
+                parts.append(where)
+            parts.append("%d%%" % (self.zoom * 100))
+            if editor.mode == "objects":
+                parts.append("snap on" if editor.snap else "snap off")
+            self._text(rv, "     ".join(parts), (12, h - EDITOR_STATUS + 5), st, at, size=13, color="#b8bcc4")
+
+        ## Input
+
+        def _dragged(self):
+            if self._drag is None or self.mouse is None:
+                return False
+            start = self._drag[2]
+            return abs(self.mouse.x - start.x) > self.DRAG_THRESHOLD or abs(self.mouse.y - start.y) > self.DRAG_THRESHOLD
+
+        def event(self, ev, x, y, st):
+            editor = self.editor
+            inside = 0 <= x < self.width and 0 <= y < self.height - EDITOR_STATUS
+
+            if ev.type == pygame.MOUSEMOTION:
+                self.mouse = Vector2(x, y) if inside else None
+                if self._pan_from is not None:
+                    self.origin = self._pan_origin - (Vector2(x, y) - self._pan_from) / self.zoom
+                elif editor.stroke is not None:
+                    editor.continue_stroke(self.cell_at((x, y)))
+                elif self._drag is not None:
+                    self._continue_drag(Vector2(x, y))
+                renpy.redraw(self, 0)
+                return None
+
+            if ev.type in (pygame.KEYDOWN, pygame.KEYUP) and ev.key == pygame.K_SPACE:
+                self.space = ev.type == pygame.KEYDOWN
+                raise renpy.IgnoreEvent()
+
+            if ev.type == pygame.MOUSEBUTTONDOWN and inside and editor.doc is not None:
+                if ev.button in (4, 5):
+                    self.zoom_step(1 if ev.button == 4 else -1, (x, y))
+                    renpy.redraw(self, 0)
+                    raise renpy.IgnoreEvent()
+                if ev.button == 2 or (ev.button == 1 and self.space):
+                    self._pan_from = Vector2(x, y)
+                    self._pan_origin = self.origin.copy()
+                    raise renpy.IgnoreEvent()
+                if ev.button in (1, 3):
+                    editor.message = ""
+                    if editor.mode == "mask":
+                        editor.begin_stroke(self.cell_at((x, y)), erase=ev.button == 3)
+                    elif ev.button == 1:
+                        self._begin_drag(Vector2(x, y))
+                    elif editor.has_transient():
+                        editor.clear_transient()
+                    raise renpy.IgnoreEvent()
+
+            if ev.type == pygame.MOUSEBUTTONUP:
+                if self._pan_from is not None and ev.button in (1, 2):
+                    self._pan_from = None
+                    renpy.redraw(self, 0)
+                    raise renpy.IgnoreEvent()
+                if editor.stroke is not None and ev.button in (1, 3):
+                    editor.end_stroke(self.cell_at((x, y)))
+                    raise renpy.IgnoreEvent()
+                if self._drag is not None and ev.button == 1:
+                    self._end_drag(Vector2(x, y))
+                    raise renpy.IgnoreEvent()
+
+            return None
+
+        def _begin_drag(self, screen):
+            editor = self.editor
+            world = self.to_world(screen)
+            self.mouse = screen
+            if editor.box_edit is not None and editor.selected_record is not None:
+                self._drag = ("box", world, screen, None)
+            elif editor.palette is not None:
+                self._drag = ("place", world, screen, None)
+            elif self.on_handle(screen):
+                editor.begin_change()
+                self._drag = ("resize", world, screen, None)
+            else:
+                index = self.hit_test(world)
+                editor.select(index)
+                if index is not None:
+                    record = editor.doc.objects[index]
+                    editor.begin_change()
+                    self._drag = ("move", world, screen, (record.get("x", 0), record.get("y", 0)))
+            renpy.redraw(self, 0)
+
+        def _continue_drag(self, screen):
+            kind, start, _, origin = self._drag
+            world = self.to_world(screen)
+            if kind == "move" and self._dragged():
+                self.editor.move_selected(origin, world - start)
+            elif kind == "resize":
+                self.editor.resize_selected(world)
+
+        def _end_drag(self, screen):
+            kind, start, _, _ = self._drag
+            world = self.to_world(screen)
+            dragged = self._dragged()
+            self._drag = None
+            editor = self.editor
+            if kind == "place":
+                editor.place(start, world, dragged)
+            elif kind == "box":
+                editor.set_box(editor.box_edit, start, world)
+            else:
+                editor.end_change()
+            renpy.redraw(self, 0)
+
+## The editor's flow: pick a map, edit it, playtest, repeat.
+
+label adventure_map_editor(folder=None):
+    $ renpy.block_rollback()
+    $ map_editor = MapEditor()
+    if folder:
+        $ map_editor.open(folder)
+    else:
+        call screen adventure_editor_open(map_editor)
+        if map_editor.doc is None:
+            return
+
+    while True:
+        $ editor_action = renpy.call_screen("adventure_editor", editor=map_editor)
+        if editor_action == "playtest":
+            $ map_editor.start_playtest()
+            # If the playtest calls a label (dialogue), returning from it runs
+            # this line again, which resumes the same playtest.
+            $ map_editor.test.run()
+            $ map_editor.test = None
+        elif editor_action == "open":
+            call screen adventure_editor_open(map_editor)
+        else:
+            return
+
+style editor_text is default:
+    size 15
+    color "#d8dbe0"
+
+style editor_label_text is editor_text:
+    size 13
+    color "#8a909a"
+    bold True
+
+style editor_button is default:
+    padding (8, 4)
+    background "#2a2e35"
+    hover_background "#3a4049"
+    selected_background "#4a6fa5"
+    selected_hover_background "#5a80b8"
+    insensitive_background "#202328"
+
+style editor_button_text is editor_text:
+    size 14
+    hover_color "#ffffff"
+    selected_color "#ffffff"
+    insensitive_color "#5a606a"
+
+style editor_bar is default:
+    ysize 16
+    left_bar Solid("#4a6fa5")
+    right_bar Solid("#2a2e35")
+    thumb None
+
+style editor_vscrollbar is default:
+    xsize 8
+    base_bar Solid("#202328")
+    thumb Solid("#4a505a")
+
+style editor_input is editor_text:
+    size 18
+    color "#ffffff"
+
+screen adventure_editor(editor):
+    style_prefix "editor"
+
+    add editor.view xpos EDITOR_SIDEBAR
+
+    frame:
+        xsize EDITOR_SIDEBAR
+        yfill True
+        background "#16181c"
+        padding (12, 12)
+
+        vbox:
+            spacing 6
+
+            text editor.title size 18 color "#ffffff" substitute False
+
+            hbox:
+                spacing 4
+                textbutton "Open" action editor.discard_guard(Return("open"))
+                textbutton "Save" action Function(editor.save) sensitive editor.dirty
+                textbutton "Test" action Return("playtest")
+                textbutton "Quit" action editor.discard_guard(Return("quit"))
+
+            hbox:
+                spacing 4
+                textbutton "Collision" action Function(editor.set_mode, "mask") selected editor.mode == "mask"
+                textbutton "Objects" action Function(editor.set_mode, "objects") selected editor.mode == "objects"
+                text "Tab" size 12 color "#6c727c" yalign 0.5
+
+            viewport:
+                scrollbars "vertical"
+                mousewheel True
+                draggable False
+                yfill True
+
+                vbox:
+                    xsize EDITOR_SIDEBAR - 36
+                    spacing 6
+
+                    if editor.mode == "mask":
+                        use adventure_editor_mask_panel(editor)
+                    else:
+                        use adventure_editor_objects_panel(editor)
+
+                    use adventure_editor_view_panel(editor)
+
+    key "K_TAB" action Function(editor.toggle_mode)
+    key "b" action Function(editor.set_tool, "brush")
+    key "r" action Function(editor.set_tool, "rect")
+    key "f" action Function(editor.set_tool, "fill")
+    key "K_LEFTBRACKET" action Function(editor.change_brush, -1)
+    key "K_RIGHTBRACKET" action Function(editor.change_brush, 1)
+    for i in range(min(9, len(editor.terrains))):
+        key str(i + 1) action Function(editor.set_terrain, i)
+    key "m" action Function(editor.toggle, "show_mask")
+    key "g" action Function(editor.toggle, "show_grid")
+    key "o" action Function(editor.toggle, "show_objects")
+    key "n" action Function(editor.toggle, "snap")
+    key "K_HOME" action Function(editor.view.fit)
+    key "K_DELETE" action Function(editor.delete_selected)
+    key "K_BACKSPACE" action Function(editor.delete_selected)
+    key "ctrl_K_d" action Function(editor.duplicate_selected)
+    key "K_LEFT" action Function(editor.nudge, -1, 0)
+    key "K_RIGHT" action Function(editor.nudge, 1, 0)
+    key "K_UP" action Function(editor.nudge, 0, -1)
+    key "K_DOWN" action Function(editor.nudge, 0, 1)
+    key "shift_K_LEFT" action Function(editor.nudge, -1, 0, True)
+    key "shift_K_RIGHT" action Function(editor.nudge, 1, 0, True)
+    key "shift_K_UP" action Function(editor.nudge, 0, -1, True)
+    key "shift_K_DOWN" action Function(editor.nudge, 0, 1, True)
+    key "ctrl_K_z" action Function(editor.undo)
+    key "ctrl_K_y" action Function(editor.redo)
+    key "ctrl_shift_K_z" action Function(editor.redo)
+    key "ctrl_K_s" action Function(editor.save)
+    key "p" action Return("playtest")
+    key "K_F9" action Return("playtest")
+    key "K_ESCAPE" action If(editor.has_transient(), Function(editor.clear_transient), editor.discard_guard(Return("quit")))
+    # Right clicks outside the canvas mustn't open the game menu.
+    key "mouseup_3" action NullAction()
+
+screen adventure_editor_mask_panel(editor):
+    label "TOOL"
+    hbox:
+        spacing 4
+        for tool, name, shortcut in MapEditor.TOOLS:
+            textbutton name action Function(editor.set_tool, tool) selected editor.tool == tool
+    hbox:
+        spacing 4
+        textbutton "-" action Function(editor.change_brush, -1)
+        text "Brush size [editor.brush_size]" yalign 0.5
+        textbutton "+" action Function(editor.change_brush, 1)
+
+    null height 6
+    label "TERRAIN"
+    for i, terrain in enumerate(editor.terrains):
+        button:
+            action Function(editor.set_terrain, i)
+            selected editor.terrain == i
+            xfill True
+            hbox:
+                spacing 8
+                add Solid(Color(tuple(getattr(terrain, "editor_color", terrain.color)[:3]))) xysize (16, 16) yalign 0.5
+                text "{}  {}".format(i + 1, terrain.name) substitute False
+    text "Right mouse paints {}.".format(editor.terrains[0].name) size 12 color "#8a909a" substitute False
+
+screen adventure_editor_objects_panel(editor):
+    $ record = editor.selected_record
+
+    if record is not None:
+        use adventure_editor_selected_panel(editor, record)
+        null height 10
+
+    label "PLACE"
+    text "Click to place, drag for an area. Right click or Esc stops." size 12 color "#8a909a"
+    for type_name in editor_type_names():
+        textbutton type_name:
+            action Function(editor.set_palette, ("type", type_name))
+            selected editor.palette == ("type", type_name)
+            xfill True
+            substitute False
+
+    null height 6
+    label "PROPS"
+    $ prop_images = editor_image_files(PROP_ROOT + "/")
+    if not prop_images:
+        text "Put prop images in game/{}.".format(PROP_ROOT) size 12 color "#8a909a" substitute False
+    for image in prop_images:
+        button:
+            action Function(editor.set_palette, ("prop", image))
+            selected editor.palette == ("prop", image)
+            xfill True
+            hbox:
+                spacing 8
+                add Transform(adventure_image(image, (28, 28)), fit="contain", xysize=(28, 28)) yalign 0.5
+                text image[len(PROP_ROOT) + 1:] yalign 0.5 substitute False
+
+screen adventure_editor_selected_panel(editor, record):
+    $ type_name = record.get("type") or "marker"
+    $ is_area = record.get("w") and record.get("h")
+
+    label "SELECTED"
+    textbutton "name: {}".format(record.get("name", "")):
+        action editor.field_action(("name",), "text", "Name")
+        xfill True
+        substitute False
+    text "type: {}".format(type_name) substitute False
+    textbutton "position: {}, {}".format(record.get("x", 0), record.get("y", 0)):
+        action editor.field_action(("position",), "text", "Position: x, y")
+        xfill True
+    if is_area:
+        textbutton "size: {}, {}".format(record.get("w", 0), record.get("h", 0)):
+            action editor.field_action(("size",), "text", "Size: width, height")
+            xfill True
+
+    for name, kind, default in editor.schema(record):
+        $ value = editor.property_value(record, name, default)
+        if kind == "bool":
+            textbutton "{}: {}".format(name, "yes" if value else "no"):
+                action Function(editor.set_property, name, not value, default)
+                xfill True
+                substitute False
+        elif kind == "facing":
+            textbutton "{}: {}".format(name, value):
+                action Function(editor.cycle_facing, name)
+                xfill True
+                substitute False
+        elif kind == "trigger":
+            textbutton "{}: {}".format(name, value):
+                action Function(editor.cycle_property, name, EDITOR_TRIGGERS)
+                xfill True
+                substitute False
+        elif kind == "room":
+            textbutton "{}: {}".format(name, value or "(this room)"):
+                action editor.choice_action(name, "Room", [("(this room)", "")] + [(r, r) for r in editor.world_rooms()])
+                xfill True
+                substitute False
+        elif kind == "marker":
+            $ marker_target = editor.property_value(record, "target", "")
+            $ marker_room = world_room(world_of(editor.doc.folder), marker_target) if marker_target else editor.doc.folder
+            textbutton "{}: {}".format(name, value or "(player_start)"):
+                action editor.choice_action(name, "Marker in " + marker_room, [("(player_start)", "")] + [(m, m) for m in map_marker_names(marker_room)])
+                xfill True
+                substitute False
+        elif kind == "sheet":
+            textbutton "{}: {}".format(name, value or "(none)"):
+                action editor.choice_action(name, "Sheet", [("(none)", "")] + [(n, n) for n in editor_sheet_names()])
+                xfill True
+                substitute False
+        elif kind == "image":
+            textbutton "{}: {}".format(name, value or "(none)"):
+                action editor.choice_action(name, "Image", [("(none)", "")] + [(p, p) for p in editor_image_files("images/")])
+                xfill True
+                substitute False
+        else:
+            $ missing = kind == "label" and value and not renpy.has_label(value)
+            textbutton "{}: {}{}".format(name, value, "  (missing)" if missing else ""):
+                action editor.field_action(("prop", name), kind, name)
+                xfill True
+                substitute False
+                text_color ("#ff8080" if missing else "#d8dbe0")
+
+    for name, value in editor.extra_properties(record):
+        textbutton "{}: {}".format(name, value):
+            action editor.field_action(("prop", name), "value", name)
+            xfill True
+            substitute False
+    textbutton "+ property" action editor.field_action(("new",), "text", "New property: name = value")
+
+    if record.get("properties", {}).get("image"):
+        hbox:
+            spacing 4
+            textbutton "Collision box" action Function(editor.toggle_box_edit, "collision") selected editor.box_edit == "collision"
+            textbutton "Clear" action Function(editor.clear_box, "collision") sensitive editor.has_box(record, "collision")
+    if record.get("type") not in ("marker", "solid") and not (record.get("w") and record.get("h")):
+        hbox:
+            spacing 4
+            textbutton "Hit box" action Function(editor.toggle_box_edit, "hitbox") selected editor.box_edit == "hitbox"
+            textbutton "Clear" action Function(editor.clear_box, "hitbox") sensitive editor.has_box(record, "hitbox")
+
+    hbox:
+        spacing 4
+        textbutton "Duplicate" action Function(editor.duplicate_selected)
+        textbutton "Delete" action Function(editor.delete_selected)
+
+screen adventure_editor_view_panel(editor):
+    null height 6
+    label "VIEW"
+    hbox:
+        spacing 4
+        textbutton "Mask" action Function(editor.toggle, "show_mask") selected editor.show_mask
+        textbutton "Grid" action Function(editor.toggle, "show_grid") selected editor.show_grid
+        textbutton "Objects" action Function(editor.toggle, "show_objects") selected editor.show_objects
+    if editor.mode == "objects":
+        textbutton "Snap to grid (N)" action Function(editor.toggle, "snap") selected editor.snap
+    text "Mask opacity" size 12 color "#8a909a"
+    bar value FieldValue(editor, "mask_opacity", 1.0, step=0.05) xfill True
+
+    if editor.doc is not None and editor.doc.layers:
+        null height 6
+        label "LAYERS"
+        for i, name in enumerate(editor.doc.layers):
+            textbutton ("{}  {}".format(name, "(under)" if i == 0 else "(over)")):
+                action Function(editor.toggle_layer, i)
+                selected i not in editor.hidden_layers
+                xfill True
+                substitute False
+
+    if editor.doc is not None:
+        use adventure_editor_world_panel(editor)
+
+    null height 10
+    text "Space/MMB drag pan, wheel zoom\nHome fit, M/G/O show\nCtrl+Z/Y undo, Ctrl+S save\nP or F9 playtest at mouse":
+        size 12
+        color "#6c727c"
+
+screen adventure_editor_world_panel(editor):
+    $ world_rect = editor.world_rect
+
+    null height 6
+    label "WORLD"
+    text "{} ({})".format(editor.world.name, world_of(editor.doc.folder)) size 13 substitute False
+    if editor.is_start_room:
+        text "Adventures start in this room." size 12 color "#8fd18f"
+    else:
+        textbutton "Make this the start room" action Function(editor.make_start_room)
+    if world_rect is None:
+        text "Not in the world layout. Interiors reached by doors don't need to be.":
+            size 12
+            color "#8a909a"
+        hbox:
+            spacing 4
+            textbutton "Add to world" action Function(editor.add_to_world)
+            textbutton "+ Right" action editor.discard_guard(Function(editor.create_neighbour, "right"))
+    else:
+        text "At {}, {} in the world.".format(int(world_rect.position.x), int(world_rect.position.y)) size 12 color "#8a909a"
+        text "New empty room beside this one:" size 12 color "#8a909a"
+        grid 3 3:
+            spacing 4
+            null
+            textbutton "+ Up" action editor.discard_guard(Function(editor.create_neighbour, "top"))
+            null
+            textbutton "+ Left" action editor.discard_guard(Function(editor.create_neighbour, "left"))
+            null
+            textbutton "+ Right" action editor.discard_guard(Function(editor.create_neighbour, "right"))
+            null
+            textbutton "+ Down" action editor.discard_guard(Function(editor.create_neighbour, "bottom"))
+            null
+        $ neighbours = editor.neighbour_rooms()
+        if neighbours:
+            text "Next to it (click to open):" size 12 color "#8a909a"
+            for path in neighbours:
+                textbutton path:
+                    action editor.discard_guard(Function(editor.open_room, path))
+                    xfill True
+                    substitute False
+        textbutton "Remove from world" action Confirm("Remove {} from the world layout? Its folder stays.".format(editor.doc.folder), Function(editor.remove_from_world))
+
+screen adventure_editor_field(editor):
+    style_prefix "editor"
+    modal True
+    zorder 100
+
+    add Solid("#00000088")
+
+    if editor.field is not None:
+        frame:
+            xalign 0.5
+            yalign 0.4
+            xsize 460
+            background "#1d2025"
+            padding (16, 16)
+
+            vbox:
+                spacing 10
+                text editor.field["title"] substitute False
+                frame:
+                    background "#101215"
+                    padding (8, 6)
+                    xfill True
+                    input:
+                        value FieldInputValue(editor, "field_text")
+                        action [Function(editor.commit_field), Hide("adventure_editor_field")]
+                        copypaste True
+                        length 200
+                        pixel_width 400
+                hbox:
+                    spacing 6
+                    textbutton "OK" action [Function(editor.commit_field), Hide("adventure_editor_field")]
+                    textbutton "Cancel" action Hide("adventure_editor_field")
+                text "Empty text removes the property." size 12 color "#8a909a"
+
+    key "K_ESCAPE" action Hide("adventure_editor_field")
+
+screen adventure_editor_choice(editor):
+    style_prefix "editor"
+    modal True
+    zorder 100
+
+    add Solid("#00000088")
+
+    if editor.choice is not None:
+        frame:
+            xalign 0.5
+            yalign 0.4
+            xsize 460
+            background "#1d2025"
+            padding (16, 16)
+
+            vbox:
+                spacing 10
+                text editor.choice["title"] substitute False
+                viewport:
+                    ysize 360
+                    scrollbars "vertical"
+                    mousewheel True
+                    vbox:
+                        spacing 4
+                        xsize 410
+                        for option_label, option_value in editor.choice["options"]:
+                            textbutton option_label:
+                                action [Function(editor.commit_choice, option_value), Hide("adventure_editor_choice")]
+                                xfill True
+                                substitute False
+                textbutton "Cancel" action Hide("adventure_editor_choice")
+
+    key "K_ESCAPE" action Hide("adventure_editor_choice")
+
+screen adventure_editor_open(editor):
+    style_prefix "editor"
+    modal True
+
+    add Solid("#000000cc")
+
+    frame:
+        xalign 0.5
+        yalign 0.5
+        xsize 600
+        background "#1d2025"
+        padding (20, 20)
+
+        vbox:
+            spacing 10
+
+            text "Open a map" size 24 color "#ffffff"
+            text "Worlds are folders in game/[MAP_ROOT]; their rooms are folders inside them. To make a room from art, export its layer images into a new folder in the world, named so they sort bottom to top (0_ground.png, 1_roofs.png...). The first layer is drawn under characters, the others over them.":
+                size 14
+                color "#9aa0aa"
+
+            hbox:
+                spacing 16
+
+                vbox:
+                    xsize 220
+                    spacing 6
+                    label "WORLDS"
+                    viewport:
+                        ysize 260
+                        scrollbars "vertical"
+                        mousewheel True
+                        vbox:
+                            spacing 4
+                            for world in world_folders():
+                                textbutton WorldLayout.get(world).name:
+                                    action Function(editor.choose_world, world)
+                                    selected editor.open_world == world
+                                    xfill True
+                                    substitute False
+                    hbox:
+                        spacing 4
+                        frame:
+                            background "#101215"
+                            padding (6, 4)
+                            xsize 130
+                            input:
+                                value FieldInputValue(editor, "new_world_name")
+                                length 40
+                                pixel_width 118
+                                size 15
+                        textbutton "New world" action Function(editor.create_world_from_name) sensitive bool(editor.new_world_name.strip())
+
+                vbox:
+                    xsize 280
+                    spacing 6
+                    label "ROOMS"
+                    if editor.open_world is None:
+                        text "Pick a world." size 14 color "#8a909a"
+                    else:
+                        viewport:
+                            ysize 260
+                            scrollbars "vertical"
+                            mousewheel True
+                            vbox:
+                                spacing 4
+                                for folder, has_map in world_room_folders(editor.open_world):
+                                    textbutton ("{}{}".format(folder.rpartition("/")[2], "" if has_map else "   (new)")):
+                                        action Function(editor.choose_folder, folder)
+                                        selected editor.new_folder == folder
+                                        xfill True
+                                        substitute False
+                        textbutton "New blank room" action Function(editor.create_blank_room_here)
+
+            if editor.message:
+                text editor.message size 14 color "#ffd479" substitute False
+
+            if editor.new_folder:
+                text "New map from {}: {}".format(editor.new_folder, ", ".join(map_layer_files(editor.new_folder))):
+                    size 14
+                    substitute False
+                hbox:
+                    spacing 6
+                    text "Collision cell size" yalign 0.5
+                    for cell_px in MapEditor.CELL_SIZES:
+                        textbutton "[cell_px] px" action SetField(editor, "new_cell_size", cell_px) selected editor.new_cell_size == cell_px
+                textbutton "Create" action Function(editor.create_new)
+
+            hbox:
+                spacing 6
+                textbutton "Refresh" action Function(renpy.restart_interaction)
+                textbutton "Cancel" action Return(None)

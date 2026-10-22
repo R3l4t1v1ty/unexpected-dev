@@ -1,0 +1,328 @@
+## Vector2, a Python take on Godot's Vector2 (core/math/vector2.h, Godot 4.4).
+##
+## Python protocols replace Godot's helper methods:
+##     abs(v)  round(v)  math.floor(v)  math.ceil(v)  math.trunc(v)
+##     v % 3   v // 16   (instead of posmod/posmodv and floor(v / 16))
+##     x, y = v   tuple(v)   v[0]   Vector2((10, 20))
+## Arithmetic and snapped/clamp/min/max take a vector or a number for each
+## operand, so the Godot f-variants (snappedf, clampf, minf, maxf) are gone.
+##
+## Reference semantics: `a = b` shares the vector. Arithmetic always returns a
+## new vector and `a += b` rebinds `a`, so that's safe. Setting a component
+## (`a.x = 3`) changes every name bound to it, so call `.copy()` first if you
+## need an independent vector. Constants (Vector2.ZERO, ...) return a fresh
+## vector on every access, so they can't be corrupted that way.
+
+init -998 python:
+
+    import math
+    import operator
+
+    class _Constant(python_object):
+        """Class attribute that hands out a fresh instance on each access, so
+        constants like Vector2.ZERO can't be corrupted by mutation."""
+
+        __slots__ = ("args",)
+
+        def __init__(self, *args):
+            self.args = args
+
+        def __get__(self, instance, owner):
+            return owner(*self.args)
+
+    def _xy(value):
+        """(x, y) of a vector, or a number broadcast to both components."""
+        if isinstance(value, (int, float)):
+            return value, value
+        if isinstance(value, _VectorBase):
+            return value.x, value.y
+        raise TypeError("expected a vector or a number, got %s" % type(value).__name__)
+
+    def _vector_compare(op):
+        """Exact, lexicographic (x first, then y) comparison like Godot's.
+        Only vectors of the same type compare; Vector2 never equals Vector2i."""
+        def method(self, other):
+            if not isinstance(other, type(self)):
+                return NotImplemented
+            return op((self.x, self.y), (other.x, other.y))
+        return method
+
+    def _vector2_op(op):
+        """Forward and reflected Vector2 operators. The other operand can be any
+        vector (a Vector2i is promoted) or a number (applied to both components)."""
+        def forward(self, other):
+            try:
+                ox, oy = _xy(other)
+            except TypeError:
+                return NotImplemented
+            return Vector2(op(self.x, ox), op(self.y, oy))
+
+        def reflected(self, other):
+            try:
+                ox, oy = _xy(other)
+            except TypeError:
+                return NotImplemented
+            return Vector2(op(ox, self.x), op(oy, self.y))
+
+        return forward, reflected
+
+    class _VectorBase(python_object):
+        """Shared by Vector2 and Vector2i. Subclasses set _cast to float or int."""
+
+        __slots__ = ("x", "y")
+
+        AXIS_X = 0
+        AXIS_Y = 1
+
+        def __init__(self, x=0, y=0):
+            try:
+                self.x = self._cast(x)
+                self.y = self._cast(y)
+            except TypeError:
+                # Copy from another vector or an (x, y) sequence.
+                self.x = self._cast(x[0])
+                self.y = self._cast(x[1])
+
+        def copy(self):
+            return type(self)(self.x, self.y)
+
+        ## Python protocol
+
+        def __reduce__(self):
+            return (type(self), (self.x, self.y))
+
+        def __repr__(self):
+            return "%s(%r, %r)" % (type(self).__name__, self.x, self.y)
+
+        def __str__(self):
+            return "(%r, %r)" % (self.x, self.y)
+
+        def __iter__(self):
+            return iter((self.x, self.y))
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, axis):
+            return (self.x, self.y)[axis]
+
+        def __setitem__(self, axis, value):
+            setattr(self, ("x", "y")[axis], self._cast(value))
+
+        def __hash__(self):
+            return hash((self.x, self.y))
+
+        def __bool__(self):
+            return bool(self.x or self.y)
+
+        __eq__ = _vector_compare(operator.eq)
+        __lt__ = _vector_compare(operator.lt)
+        __le__ = _vector_compare(operator.le)
+        __gt__ = _vector_compare(operator.gt)
+        __ge__ = _vector_compare(operator.ge)
+
+        def __neg__(self):
+            return type(self)(-self.x, -self.y)
+
+        def __pos__(self):
+            return self.copy()
+
+        def __abs__(self):
+            return type(self)(abs(self.x), abs(self.y))
+
+        ## Length
+
+        def length(self):
+            return math.hypot(self.x, self.y)
+
+        def length_squared(self):
+            return self.x * self.x + self.y * self.y
+
+        def distance_to(self, to):
+            return math.hypot(to.x - self.x, to.y - self.y)
+
+        def distance_squared_to(self, to):
+            dx = to.x - self.x
+            dy = to.y - self.y
+            return dx * dx + dy * dy
+
+        def aspect(self):
+            return self.x / self.y
+
+        ## Component-wise (each argument may be a vector or a number)
+
+        def sign(self):
+            return type(self)(gmath.sign(self.x), gmath.sign(self.y))
+
+        def snapped(self, step):
+            sx, sy = _xy(step)
+            return type(self)(gmath.snapped(self.x, sx), gmath.snapped(self.y, sy))
+
+        def clamp(self, min_value, max_value):
+            lx, ly = _xy(min_value)
+            hx, hy = _xy(max_value)
+            return type(self)(gmath.clamp(self.x, lx, hx), gmath.clamp(self.y, ly, hy))
+
+        def min(self, other):
+            ox, oy = _xy(other)
+            return type(self)(min(self.x, ox), min(self.y, oy))
+
+        def max(self, other):
+            ox, oy = _xy(other)
+            return type(self)(max(self.x, ox), max(self.y, oy))
+
+        def min_axis_index(self):
+            return self.AXIS_X if self.x < self.y else self.AXIS_Y
+
+        def max_axis_index(self):
+            return self.AXIS_Y if self.x < self.y else self.AXIS_X
+
+    class Vector2(_VectorBase):
+
+        __slots__ = ()
+        _cast = float
+
+        @staticmethod
+        def from_angle(angle):
+            return Vector2(math.cos(angle), math.sin(angle))
+
+        ## Operators
+
+        __add__, __radd__ = _vector2_op(operator.add)
+        __sub__, __rsub__ = _vector2_op(operator.sub)
+        __mul__, __rmul__ = _vector2_op(operator.mul)
+        __truediv__, __rtruediv__ = _vector2_op(operator.truediv)
+        __floordiv__, __rfloordiv__ = _vector2_op(operator.floordiv)
+        __mod__, __rmod__ = _vector2_op(operator.mod)
+
+        def __round__(self, ndigits=None):
+            """round(v) rounds half away from zero like Godot; round(v, n) uses Python's rounding."""
+            if ndigits is None:
+                return Vector2(gmath.round(self.x), gmath.round(self.y))
+            return Vector2(round(self.x, ndigits), round(self.y, ndigits))
+
+        def __floor__(self):
+            return Vector2(math.floor(self.x), math.floor(self.y))
+
+        def __ceil__(self):
+            return Vector2(math.ceil(self.x), math.ceil(self.y))
+
+        def __trunc__(self):
+            return Vector2(math.trunc(self.x), math.trunc(self.y))
+
+        ## Direction
+
+        def normalized(self):
+            l = self.length()
+            if l:
+                return Vector2(self.x / l, self.y / l)
+            return self.copy()
+
+        def is_normalized(self):
+            # length_squared() avoids the sqrt and is more stringent.
+            return math.isclose(self.length_squared(), 1.0, abs_tol=gmath.UNIT_EPSILON)
+
+        def limit_length(self, length=1.0):
+            l = self.length()
+            if 0 < l and length < l:
+                return self * (length / l)
+            return self.copy()
+
+        def direction_to(self, to):
+            return (to - self).normalized()
+
+        ## Angles (radians)
+
+        def angle(self):
+            return math.atan2(self.y, self.x)
+
+        def angle_to(self, to):
+            return math.atan2(self.cross(to), self.dot(to))
+
+        def angle_to_point(self, to):
+            return math.atan2(to.y - self.y, to.x - self.x)
+
+        def rotated(self, angle):
+            sine = math.sin(angle)
+            cosi = math.cos(angle)
+            return Vector2(self.x * cosi - self.y * sine, self.x * sine + self.y * cosi)
+
+        def orthogonal(self):
+            return Vector2(self.y, -self.x)
+
+        ## Products / projections
+
+        def dot(self, other):
+            return self.x * other.x + self.y * other.y
+
+        def cross(self, other):
+            return self.x * other.y - self.y * other.x
+
+        def project(self, b):
+            return b * (self.dot(b) / b.length_squared())
+
+        def plane_project(self, d, vec):
+            return vec - self * (self.dot(vec) - d)
+
+        def slide(self, n):
+            """Component of this vector along the plane with normal n (n must be normalized)."""
+            return self - n * self.dot(n)
+
+        def bounce(self, n):
+            return -self.reflect(n)
+
+        def reflect(self, line):
+            return line * (2.0 * self.dot(line)) - self
+
+        ## Interpolation (the gmath versions work on vectors as-is)
+
+        def lerp(self, to, weight):
+            return self + (to - self) * weight
+
+        def slerp(self, to, weight):
+            start_length_sq = self.length_squared()
+            end_length_sq = to.length_squared()
+            if not start_length_sq or not end_length_sq:
+                # Zero length vectors have no angle, so the best we can do is lerp.
+                return self.lerp(to, weight)
+            start_length = math.sqrt(start_length_sq)
+            result_length = gmath.lerp(start_length, math.sqrt(end_length_sq), weight)
+            return self.rotated(self.angle_to(to) * weight) * (result_length / start_length)
+
+        def cubic_interpolate(self, b, pre_a, post_b, weight):
+            return gmath.cubic_interpolate(self, b, pre_a, post_b, weight)
+
+        def cubic_interpolate_in_time(self, b, pre_a, post_b, weight, b_t, pre_a_t, post_b_t):
+            return gmath.cubic_interpolate_in_time(self, b, pre_a, post_b, weight, b_t, pre_a_t, post_b_t)
+
+        def bezier_interpolate(self, control_1, control_2, end, t):
+            return gmath.bezier_interpolate(self, control_1, control_2, end, t)
+
+        def bezier_derivative(self, control_1, control_2, end, t):
+            return gmath.bezier_derivative(self, control_1, control_2, end, t)
+
+        def move_toward(self, to, delta):
+            offset = to - self
+            l = offset.length()
+            if l <= delta or l < gmath.CMP_EPSILON:
+                return Vector2(to.x, to.y)
+            return self + offset * (delta / l)
+
+        ## Checks
+
+        def is_equal_approx(self, to):
+            return gmath.is_equal_approx(self.x, to.x) and gmath.is_equal_approx(self.y, to.y)
+
+        def is_zero_approx(self):
+            return abs(self.x) < gmath.CMP_EPSILON and abs(self.y) < gmath.CMP_EPSILON
+
+        def is_finite(self):
+            return math.isfinite(self.x) and math.isfinite(self.y)
+
+    Vector2.ZERO = _Constant(0.0, 0.0)
+    Vector2.ONE = _Constant(1.0, 1.0)
+    Vector2.INF = _Constant(math.inf, math.inf)
+    Vector2.LEFT = _Constant(-1.0, 0.0)
+    Vector2.RIGHT = _Constant(1.0, 0.0)
+    Vector2.UP = _Constant(0.0, -1.0)
+    Vector2.DOWN = _Constant(0.0, 1.0)

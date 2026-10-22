@@ -1,0 +1,246 @@
+## Rect2, a Python take on Godot's Rect2 (core/math/rect2.h, Godot 4.4).
+##
+## An axis-aligned rectangle: `position` (top-left corner) and `size`, both
+## Vector2. Godot's getters are properties: rect.end, rect.center, rect.area.
+##
+## Python protocols:
+##     point in rect      has_point
+##     a & b              intersection; an empty Rect2 when they don't overlap,
+##                        so `if a & b:` reads as "if they overlap"
+##     a | b              merge
+##     abs(rect)  round(rect)
+##     x, y, w, h = rect  tuple(rect) is Ren'Py's (x, y, w, h) format
+##
+## Rect2(x, y, w, h), Rect2(position, size) and Rect2((x, y, w, h)) all work.
+## Rect2i (rect2i.rpy) shares everything here except the Rect2-only section.
+## Like Godot, most methods assume a non-negative size; use abs(rect) first.
+## Assigning `rect.position = v` copies v; `rect.position.x = 3` edits in place.
+
+init -996 python:
+
+    class _RectBase(python_object):
+        """Shared by Rect2 and Rect2i. Subclasses set _vector to Vector2 or Vector2i."""
+
+        __slots__ = ("_position", "_size")
+
+        SIDE_LEFT = 0
+        SIDE_TOP = 1
+        SIDE_RIGHT = 2
+        SIDE_BOTTOM = 3
+
+        def __init__(self, *args):
+            if len(args) == 2:
+                self.position, self.size = args
+                return
+            if len(args) == 1:
+                args = tuple(args[0])
+            elif not args:
+                args = (0.0, 0.0, 0.0, 0.0)
+            x, y, w, h = args
+            self._position = self._vector(x, y)
+            self._size = self._vector(w, h)
+
+        @classmethod
+        def from_points(cls, points):
+            """Smallest rect that contains every point (vectors or (x, y) pairs)."""
+            xs, ys = zip(*points)
+            left = min(xs)
+            top = min(ys)
+            return cls(left, top, max(xs) - left, max(ys) - top)
+
+        def copy(self):
+            return type(self)(self)
+
+        ## Properties
+
+        @property
+        def position(self):
+            return self._position
+
+        @position.setter
+        def position(self, value):
+            self._position = self._vector(*value)
+
+        @property
+        def size(self):
+            return self._size
+
+        @size.setter
+        def size(self, value):
+            self._size = self._vector(*value)
+
+        @property
+        def end(self):
+            """Bottom-right corner. Setting it resizes the rect, keeping position."""
+            return self._position + self._size
+
+        @end.setter
+        def end(self, value):
+            self._size = self._vector(*value) - self._position
+
+        @property
+        def area(self):
+            return self._size.x * self._size.y
+
+        ## Python protocol
+
+        def __reduce__(self):
+            return (type(self), tuple(self))
+
+        def __repr__(self):
+            return "%s(%r, %r, %r, %r)" % ((type(self).__name__,) + tuple(self))
+
+        def __str__(self):
+            return "[P: %s, S: %s]" % (self._position, self._size)
+
+        def __iter__(self):
+            return iter((self._position.x, self._position.y, self._size.x, self._size.y))
+
+        def __eq__(self, other):
+            if not isinstance(other, type(self)):
+                return NotImplemented
+            return self._position == other._position and self._size == other._size
+
+        def __hash__(self):
+            return hash(tuple(self))
+
+        def __bool__(self):
+            return bool(self._position or self._size)
+
+        def __contains__(self, point):
+            return self.has_point(point)
+
+        def __and__(self, other):
+            return self.intersection(other) if isinstance(other, type(self)) else NotImplemented
+
+        def __or__(self, other):
+            return self.merge(other) if isinstance(other, type(self)) else NotImplemented
+
+        def __abs__(self):
+            """Same rect with a non-negative size."""
+            return type(self)(self._position + self._size.min(0), abs(self._size))
+
+        ## Queries
+
+        def has_area(self):
+            return self._size.x > 0 and self._size.y > 0
+
+        def has_point(self, point):
+            """True if point is inside. The right and bottom edges are excluded."""
+            px, py = point
+            x, y, w, h = self
+            return x <= px < x + w and y <= py < y + h
+
+        def encloses(self, other):
+            """True if other lies completely inside this rect."""
+            x, y, w, h = self
+            ox, oy, ow, oh = other
+            return ox >= x and oy >= y and ox + ow <= x + w and oy + oh <= y + h
+
+        def intersects(self, other, include_borders=False):
+            """True if the rects overlap. Touching edges only count with include_borders."""
+            x, y, w, h = self
+            ox, oy, ow, oh = other
+            if include_borders:
+                return x <= ox + ow and ox <= x + w and y <= oy + oh and oy <= y + h
+            return x < ox + ow and ox < x + w and y < oy + oh and oy < y + h
+
+        ## New rects
+
+        def intersection(self, other):
+            """The overlapping area, or an empty rect if they don't intersect."""
+            if not self.intersects(other):
+                return type(self)()
+            begin = self._position.max(other._position)
+            return type(self)(begin, self.end.min(other.end) - begin)
+
+        def merge(self, other):
+            """Smallest rect containing both."""
+            begin = self._position.min(other._position)
+            return type(self)(begin, self.end.max(other.end) - begin)
+
+        def expand(self, point):
+            """Smallest rect containing this one and the point."""
+            point = self._vector(*point)
+            begin = self._position.min(point)
+            return type(self)(begin, self.end.max(point) - begin)
+
+        def grow(self, amount):
+            return self.grow_individual(amount, amount, amount, amount)
+
+        def grow_individual(self, left, top, right, bottom):
+            x, y, w, h = self
+            return type(self)(x - left, y - top, w + left + right, h + top + bottom)
+
+        def grow_side(self, side, amount):
+            """Grows one side; side is Rect2.SIDE_LEFT / SIDE_TOP / SIDE_RIGHT / SIDE_BOTTOM."""
+            amounts = [0, 0, 0, 0]
+            amounts[side] = amount
+            return self.grow_individual(*amounts)
+
+    class Rect2(_RectBase):
+
+        __slots__ = ()
+        _vector = Vector2
+
+        @property
+        def center(self):
+            return self._position + self._size * 0.5
+
+        def __round__(self, ndigits=None):
+            return Rect2(round(self._position, ndigits), round(self._size, ndigits))
+
+        def intersects_segment(self, from_point, to_point):
+            """Where the segment from_point -> to_point first enters the rect.
+
+            Returns (hit_position, hit_normal), or None if the segment misses.
+            A segment starting inside hits at from_point with a zero normal.
+            """
+            from_point = Vector2(*from_point)
+            to_point = Vector2(*to_point)
+            t_min, t_max = 0.0, 1.0
+            axis = 0
+            normal_sign = 0.0
+
+            for i in (0, 1):
+                seg_from = from_point[i]
+                seg_to = to_point[i]
+                box_begin = self._position[i]
+                box_end = box_begin + self._size[i]
+
+                if seg_from < seg_to:
+                    if seg_from > box_end or seg_to < box_begin:
+                        return None
+                    length = seg_to - seg_from
+                    cmin = (box_begin - seg_from) / length if seg_from < box_begin else 0.0
+                    cmax = (box_end - seg_from) / length if seg_to > box_end else 1.0
+                    csign = -1.0
+                else:
+                    if seg_to > box_end or seg_from < box_begin:
+                        return None
+                    length = seg_to - seg_from
+                    cmin = (box_end - seg_from) / length if seg_from > box_end else 0.0
+                    cmax = (box_begin - seg_from) / length if seg_to < box_begin else 1.0
+                    csign = 1.0
+
+                if cmin > t_min:
+                    t_min, axis, normal_sign = cmin, i, csign
+                t_max = min(t_max, cmax)
+                if t_max < t_min:
+                    return None
+
+            normal = Vector2()
+            normal[axis] = normal_sign
+            return from_point + (to_point - from_point) * t_min, normal
+
+        def get_support(self, direction):
+            """The corner furthest in the given direction."""
+            dx, dy = direction
+            x, y, w, h = self
+            return Vector2(x + w if dx > 0 else x, y + h if dy > 0 else y)
+
+        def is_equal_approx(self, other):
+            return self._position.is_equal_approx(other._position) and self._size.is_equal_approx(other._size)
+
+        def is_finite(self):
+            return self._position.is_finite() and self._size.is_finite()

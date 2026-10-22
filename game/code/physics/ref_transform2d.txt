@@ -1,0 +1,317 @@
+## Transform2D, a Python take on Godot's Transform2D (core/math/transform_2d.h, Godot 4.4).
+##
+## This is the 2D matrix type: a 2x3 affine matrix stored as three Vector2
+## columns, the basis `x` and `y` plus the translation `origin`. Godot's
+## get_/set_ pairs are properties: t.rotation, t.scale, t.skew, t.origin.
+##
+## Python's matrix operator `@` applies it (Godot's `*` works too):
+##     parent @ child                compose (child first, then parent)
+##     t @ vector  t @ rect  t @ [points]    (a Rect2i comes back as a Rect2)
+##     vector @ t  rect @ t          inverse transform; like Godot, this assumes
+##                                   no scale or skew (use t.affine_inverse() @ v)
+##     t * 2.0     t / 2.0           scale every column
+##
+## Constructors, as in Godot:
+##     Transform2D()                                     identity
+##     Transform2D(rotation, position)
+##     Transform2D(rotation, scale, skew, position)
+##     Transform2D(x, y, origin)                         columns
+##     Transform2D(xx, xy, yx, yy, ox, oy)               six floats
+##
+## 2D is y-down, so a positive rotation turns clockwise on screen.
+## t.to_matrix() converts to a Ren'Py Matrix for ATL's `matrixtransform`.
+
+init -994 python:
+
+    def _rect_corners(rect):
+        x, y, w, h = rect
+        return (Vector2(x, y), Vector2(x + w, y), Vector2(x, y + h), Vector2(x + w, y + h))
+
+    class Transform2D(python_object):
+
+        __slots__ = ("_x", "_y", "_origin")
+
+        def __init__(self, *args):
+            n = len(args)
+            if n == 6:
+                xx, xy, yx, yy, ox, oy = args
+                self._x = Vector2(xx, xy)
+                self._y = Vector2(yx, yy)
+                self._origin = Vector2(ox, oy)
+            elif n == 0:
+                self._x = Vector2(1.0, 0.0)
+                self._y = Vector2(0.0, 1.0)
+                self._origin = Vector2()
+            elif n == 1:
+                self.x, self.y, self.origin = args[0]
+            elif n == 3:
+                self.x, self.y, self.origin = args
+            elif n == 2:
+                rotation, position = args
+                cr = math.cos(rotation)
+                sr = math.sin(rotation)
+                self._x = Vector2(cr, sr)
+                self._y = Vector2(-sr, cr)
+                self.origin = position
+            elif n == 4:
+                rotation, scale, skew, position = args
+                sx, sy = scale
+                self._x = Vector2(math.cos(rotation) * sx, math.sin(rotation) * sx)
+                self._y = Vector2(-math.sin(rotation + skew) * sy, math.cos(rotation + skew) * sy)
+                self.origin = position
+            else:
+                raise TypeError("Transform2D() takes 0, 1, 2, 3, 4 or 6 arguments (%d given)" % n)
+
+        def copy(self):
+            return Transform2D(*self._floats())
+
+        def _floats(self):
+            return (self._x.x, self._x.y, self._y.x, self._y.y, self._origin.x, self._origin.y)
+
+        ## Columns (assigning copies the value)
+
+        @property
+        def x(self):
+            return self._x
+
+        @x.setter
+        def x(self, value):
+            self._x = Vector2(*value)
+
+        @property
+        def y(self):
+            return self._y
+
+        @y.setter
+        def y(self, value):
+            self._y = Vector2(*value)
+
+        @property
+        def origin(self):
+            return self._origin
+
+        @origin.setter
+        def origin(self, value):
+            self._origin = Vector2(*value)
+
+        ## Decomposed properties
+
+        @property
+        def rotation(self):
+            return math.atan2(self._x.y, self._x.x)
+
+        @rotation.setter
+        def rotation(self, value):
+            # Keeps scale; like Godot, this resets any skew.
+            sx, sy = self.scale
+            cr = math.cos(value)
+            sr = math.sin(value)
+            self._x = Vector2(cr * sx, sr * sx)
+            self._y = Vector2(-sr * sy, cr * sy)
+
+        @property
+        def scale(self):
+            """Length of each basis column; y is negative when the transform is flipped."""
+            return Vector2(self._x.length(), gmath.sign(self.determinant()) * self._y.length())
+
+        @scale.setter
+        def scale(self, value):
+            sx, sy = value
+            self._x = self._x.normalized() * sx
+            self._y = self._y.normalized() * sy
+
+        @property
+        def skew(self):
+            det_sign = gmath.sign(self.determinant())
+            cos_angle = self._x.normalized().dot(self._y.normalized() * det_sign)
+            return math.acos(gmath.clamp(cos_angle, -1.0, 1.0)) - math.pi / 2
+
+        @skew.setter
+        def skew(self, value):
+            det_sign = gmath.sign(self.determinant())
+            self._y = self._x.rotated(math.pi / 2 + value).normalized() * (det_sign * self._y.length())
+
+        ## Python protocol
+
+        def __reduce__(self):
+            return (Transform2D, self._floats())
+
+        def __repr__(self):
+            return "Transform2D(%r, %r, %r, %r, %r, %r)" % self._floats()
+
+        def __str__(self):
+            return "[X: %s, Y: %s, O: %s]" % (self._x, self._y, self._origin)
+
+        def __iter__(self):
+            return iter((self._x, self._y, self._origin))
+
+        def __len__(self):
+            return 3
+
+        def __getitem__(self, column):
+            return (self._x, self._y, self._origin)[column]
+
+        def __setitem__(self, column, value):
+            setattr(self, ("x", "y", "origin")[column], value)
+
+        def __eq__(self, other):
+            if not isinstance(other, Transform2D):
+                return NotImplemented
+            return self._floats() == other._floats()
+
+        def __hash__(self):
+            return hash(self._floats())
+
+        ## Operators
+
+        def __matmul__(self, other):
+            if isinstance(other, Transform2D):
+                ax, ay, ao = self._x, self._y, self._origin
+                bx, by, bo = other._x, other._y, other._origin
+                return Transform2D(
+                    ax.x * bx.x + ay.x * bx.y, ax.y * bx.x + ay.y * bx.y,
+                    ax.x * by.x + ay.x * by.y, ax.y * by.x + ay.y * by.y,
+                    ax.x * bo.x + ay.x * bo.y + ao.x, ax.y * bo.x + ay.y * bo.y + ao.y)
+            if isinstance(other, _VectorBase):
+                return self.xform(other)
+            if isinstance(other, _RectBase):
+                return Rect2.from_points([self.xform(c) for c in _rect_corners(other)])
+            if isinstance(other, (list, tuple)):
+                return [self @ point for point in other]
+            return NotImplemented
+
+        def __rmatmul__(self, other):
+            if isinstance(other, _VectorBase):
+                return self.xform_inv(other)
+            if isinstance(other, _RectBase):
+                return Rect2.from_points([self.xform_inv(c) for c in _rect_corners(other)])
+            if isinstance(other, (list, tuple)):
+                return [point @ self for point in other]
+            return NotImplemented
+
+        def __mul__(self, other):
+            if isinstance(other, (int, float)):
+                return Transform2D(self._x * other, self._y * other, self._origin * other)
+            return self.__matmul__(other)
+
+        def __rmul__(self, other):
+            if isinstance(other, (int, float)):
+                return self * other
+            return self.__rmatmul__(other)
+
+        def __truediv__(self, other):
+            if isinstance(other, (int, float)):
+                return Transform2D(self._x / other, self._y / other, self._origin / other)
+            return NotImplemented
+
+        ## Applying to vectors
+
+        def basis_xform(self, v):
+            """Applies rotation, scale and skew, but not the translation."""
+            x, y = self._x, self._y
+            return Vector2(x.x * v.x + y.x * v.y, x.y * v.x + y.y * v.y)
+
+        def basis_xform_inv(self, v):
+            return Vector2(self._x.dot(v), self._y.dot(v))
+
+        def xform(self, v):
+            x, y, o = self._x, self._y, self._origin
+            return Vector2(x.x * v.x + y.x * v.y + o.x, x.y * v.x + y.y * v.y + o.y)
+
+        def xform_inv(self, v):
+            """Inverse of xform() when the basis is orthonormal (no scale or skew)."""
+            return self.basis_xform_inv(v - self._origin)
+
+        ## Inverses
+
+        def determinant(self):
+            return self._x.x * self._y.y - self._x.y * self._y.x
+
+        def inverse(self):
+            """Fast inverse for rotation + translation only; see affine_inverse()."""
+            x, y = self._x, self._y
+            t = Transform2D(x.x, y.x, x.y, y.y, 0.0, 0.0)
+            t._origin = t.basis_xform(-self._origin)
+            return t
+
+        def affine_inverse(self):
+            """Full inverse, handling scale and skew. Raises ZeroDivisionError if not invertible."""
+            idet = 1.0 / self.determinant()
+            x, y = self._x, self._y
+            t = Transform2D(y.y * idet, -x.y * idet, -y.x * idet, x.x * idet, 0.0, 0.0)
+            t._origin = t.basis_xform(-self._origin)
+            return t
+
+        ## New transforms. The plain versions apply in parent space (left
+        ## multiplication); the _local versions apply in local space (right).
+
+        def rotated(self, angle):
+            return Transform2D(angle, Vector2()) @ self
+
+        def rotated_local(self, angle):
+            return self @ Transform2D(angle, Vector2())
+
+        def scaled(self, scale):
+            """scale is a Vector2 or a number."""
+            return Transform2D(self._x * scale, self._y * scale, self._origin * scale)
+
+        def scaled_local(self, scale):
+            sx, sy = _xy(scale)
+            return Transform2D(self._x * sx, self._y * sy, self._origin)
+
+        def translated(self, offset):
+            return Transform2D(self._x, self._y, self._origin + offset)
+
+        def translated_local(self, offset):
+            return Transform2D(self._x, self._y, self._origin + self.basis_xform(offset))
+
+        def orthonormalized(self):
+            """Removes scale and skew (Gram-Schmidt), keeping rotation and origin."""
+            x = self._x.normalized()
+            y = (self._y - x * x.dot(self._y)).normalized()
+            return Transform2D(x, y, self._origin)
+
+        def looking_at(self, target):
+            """Rotated so +x points at target, keeping origin. Scale and skew are dropped."""
+            t = Transform2D(self.rotation, self._origin)
+            local_target = self.affine_inverse().xform(target)
+            t.rotation = t.rotation + (local_target * self.scale).angle()
+            return t
+
+        def interpolate_with(self, to, weight):
+            """Interpolates rotation, scale, skew and origin separately."""
+            return Transform2D(
+                gmath.lerp_angle(self.rotation, to.rotation, weight),
+                self.scale.lerp(to.scale, weight),
+                gmath.lerp_angle(self.skew, to.skew, weight),
+                self._origin.lerp(to._origin, weight))
+
+        ## Checks
+
+        def is_conformal(self):
+            """True if the basis has no skew and the same scale on both axes."""
+            eq = gmath.is_equal_approx
+            x, y = self._x, self._y
+            return (eq(x.x, y.y) and eq(x.y, -y.x)) or (eq(x.x, -y.y) and eq(x.y, y.x))
+
+        def is_equal_approx(self, other):
+            return all(a.is_equal_approx(b) for a, b in zip(self, other))
+
+        def is_finite(self):
+            return all(column.is_finite() for column in self)
+
+        ## Ren'Py interop
+
+        def to_matrix(self):
+            """A renpy Matrix doing the same mapping, for ATL's `matrixtransform`."""
+            x, y, o = self._x, self._y, self._origin
+            return Matrix([
+                x.x, y.x, 0.0, o.x,
+                x.y, y.y, 0.0, o.y,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ])
+
+    Transform2D.IDENTITY = _Constant(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    Transform2D.FLIP_X = _Constant(-1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    Transform2D.FLIP_Y = _Constant(1.0, 0.0, 0.0, -1.0, 0.0, 0.0)

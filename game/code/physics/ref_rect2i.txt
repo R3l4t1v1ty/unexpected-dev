@@ -1,0 +1,27 @@
+## Rect2i, a Python take on Godot's Rect2i (core/math/rect2i.h, Godot 4.4).
+##
+## Rect2 with Vector2i position and size, for tile and pixel grids. Everything
+## shared lives in _RectBase (rect2.rpy): properties, `in`, `&`, `|`, abs(),
+## unpacking, has_point/encloses/intersects/intersection/merge/expand/grow.
+##
+## Differences from Rect2:
+##  - center rounds down with `//`, so Rect2i(0, 0, 5, 5).center is (2, 2).
+##  - No intersects_segment, get_support or approximate checks (as in Godot).
+##  - Rect2i(rect2) truncates toward zero; Rect2(rect2i) converts exactly.
+##  - Transform2D @ rect2i returns a Rect2, since rotation produces fractions.
+
+init -995 python:
+
+    class Rect2i(_RectBase):
+
+        __slots__ = ()
+        _vector = Vector2i
+
+        @property
+        def center(self):
+            return self._position + self._size // 2
+
+        def cells(self):
+            """Every Vector2i cell inside the rect, row by row (end excluded)."""
+            x, y, w, h = self
+            return (Vector2i(cx, cy) for cy in range(y, y + h) for cx in range(x, x + w))

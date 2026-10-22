@@ -1,0 +1,61 @@
+## Vector2i, a Python take on Godot's Vector2i (core/math/vector2i.h, Godot 4.4).
+##
+## Follows Python's integer rules rather than C++'s:
+##     v // 2   v % 3    stay Vector2i (floor division / floor modulo)
+##     v / 2    v * 0.5  return a Vector2, like int / int returns a float
+##     v + Vector2(...)  returns a Vector2
+## Components are Python ints, so they don't wrap at 32 bits.
+##
+## Everything else (indexing, comparisons, length, clamp/snapped/min/max taking
+## a vector or a number, reference semantics) is shared with Vector2; see
+## vector2.rpy. Hashable, so it works as a dict key: `tiles[Vector2i(3, 4)]`.
+
+init -997 python:
+
+    def _vector2i_op(op):
+        """Forward and reflected Vector2i operators. Int operands keep the result a
+        Vector2i and float operands promote it to Vector2. A Vector2 operand returns
+        NotImplemented so Vector2's reflected operator promotes the result."""
+        def forward(self, other):
+            if isinstance(other, Vector2i):
+                return Vector2i(op(self.x, other.x), op(self.y, other.y))
+            if isinstance(other, int):
+                return Vector2i(op(self.x, other), op(self.y, other))
+            if isinstance(other, float):
+                return op(Vector2(self.x, self.y), other)
+            return NotImplemented
+
+        def reflected(self, other):
+            if isinstance(other, int):
+                return Vector2i(op(other, self.x), op(other, self.y))
+            if isinstance(other, float):
+                return op(other, Vector2(self.x, self.y))
+            return NotImplemented
+
+        return forward, reflected
+
+    class Vector2i(_VectorBase):
+
+        __slots__ = ()
+        _cast = int
+
+        __add__, __radd__ = _vector2i_op(operator.add)
+        __sub__, __rsub__ = _vector2i_op(operator.sub)
+        __mul__, __rmul__ = _vector2i_op(operator.mul)
+        __floordiv__, __rfloordiv__ = _vector2i_op(operator.floordiv)
+        __mod__, __rmod__ = _vector2i_op(operator.mod)
+
+        def __truediv__(self, other):
+            return Vector2(self.x, self.y) / other
+
+        def __rtruediv__(self, other):
+            return other / Vector2(self.x, self.y)
+
+    Vector2i.ZERO = _Constant(0, 0)
+    Vector2i.ONE = _Constant(1, 1)
+    Vector2i.MIN = _Constant(-2 ** 31, -2 ** 31)
+    Vector2i.MAX = _Constant(2 ** 31 - 1, 2 ** 31 - 1)
+    Vector2i.LEFT = _Constant(-1, 0)
+    Vector2i.RIGHT = _Constant(1, 0)
+    Vector2i.UP = _Constant(0, -1)
+    Vector2i.DOWN = _Constant(0, 1)

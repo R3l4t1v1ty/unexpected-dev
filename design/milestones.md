@@ -12,7 +12,7 @@ Goal: a new game starts, saves and loads with the new state model; ui and dev to
 | dev | Test menu, debug overlay (first version), content validator (first version) |
 | physics | All of it can happen in parallel; it depends on nothing |
 | rpg | **Design session with you** (the RPG shapes conditions, items and adventure mode) |
-| — | **Decide the Android size strategy** (see open-questions.md) |
+| — | Android size: decided, Ren'Py's Downloader for Large Games (see architecture.md) |
 
 ## M2: World mode
 Goal: the sandbox loop works end to end with test content, for both twins.

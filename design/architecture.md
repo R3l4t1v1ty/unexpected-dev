@@ -188,7 +188,7 @@ In adventure mode, per-frame objects defined in `.rpy` derive from `python_objec
 
 ## 12. Platforms, assets and performance
 
-- **Android size.** An APK or Play bundle holds at most 2 GB (a bundle is four 500 MB packs; each file goes into one pack, every RPA archive must stay under 500 MB). With 4–5 GB of assets this needs a decision in M1: Ren'Py's Downloader for Large Games (the released game already had an "Unexpected Downloader" project), or a reduced Android asset set.
+- **Android size.** An APK or Play bundle holds at most 2 GB (a bundle is four 500 MB packs; each file goes into one pack, every RPA archive must stay under 500 MB). With 4–5 GB of assets, Android uses **Ren'Py's Downloader for Large Games** (decided in M1; the released game already had an "Unexpected Downloader" project). Set it up with the first Android build.
 - **Textures.** Keep every image ≤ 4096 px per side (Android's limit). Adventure rooms are cut into chunks of ≤ 2048 px.
 - **Asset names** come from ids (section 2). Formats: WebP/AVIF for images, webm video at most 1080p (720p for Android). No two images may share a basename under `game/images/` (Ren'Py's automatic image names use the basename and the first file wins silently); the dev validator checks this.
 - **Memory:** watch `config.image_cache_size_mb` (default 400) and webm decoding on Android.

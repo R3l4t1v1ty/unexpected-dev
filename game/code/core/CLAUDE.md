@@ -10,5 +10,8 @@ The foundation every other folder builds on: definitions and the registry, the s
 - Classes reachable from `gs` (`GameState`, `TwinState`) are pickled by name: never rename them, never add more without a very good reason.
 - `gs` holds only plain data (see Shared rules in game/code/CLAUDE.md). Reading state never writes it.
 - Everything other folders may use goes in the core section of game/code/CLAUDE.md.
+- All core files run at init -500, in file-name order, sharing the `core` store. At -500 a file only defines names and never calls into another core file; cross-file checks run in `freeze()` at init 999. `core.all` hides Python's `all()` in the core store: use `builtins.all()`.
+- Containers made at runtime that must be rollback-safe come from literals in .rpy code or `copy_plain`; use `builtins.dict/list/set` only for type checks and for data that is never saved.
+- Tests: `jump test_core_all` runs every test that needs no save/load. Two need one and are run on their own: `test_core_state` (save, restart, load, then `test_core_state_loaded`) and `test_core_state_action`. Test kinds, sections and signals are named `core_test*`.
 
 @TASKS.md

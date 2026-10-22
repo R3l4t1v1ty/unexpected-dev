@@ -59,7 +59,7 @@ The git repo is the whole project folder (`unexpected-dev/`). A session locked t
 - Never use these names: anything starting with `_`, `Condition`, `Gallery`, `achievement`, `ui`, `gui`, `audio`, `layout`, `config`, `style`, `map`, `filter`, `id`, `type`, `next`, `object`.
 
 **Init order and files**
-- Init bands: physics loader -600 · core -500 · ui registries and fx Python -400 · system classes -300 · styles, screens, content data 0 · wiring (signal connections, tab/panel registration) 100 · freeze and validate 900. Use `init offset = N` per file. Styles and screens never below 0 (`gui.init` resets styles).
+- Init bands: physics loader -600 · core -500 · ui registries and fx Python -400 · system classes -300 · styles, screens, content data 0 · wiring (signal connections, tab/panel registration) 100 · validate 900 · core freezes definitions 999. Use `init offset = N` per file. Styles and screens never below 0 (`gui.init` resets styles).
 - File suffixes: `<topic>_py.rpy` classes · `<topic>_ini.rpy` content data · `<topic>_scr.rpy` screens · `<topic>.rpy` labels · `<topic>_test.rpy` tests with `label test_<folder>_<name>` (developer mode only; dev/'s test menu lists them; excluded from builds).
 
 **Flow**
@@ -67,6 +67,7 @@ The git repo is the whole project folder (`unexpected-dev/`). A session locked t
 - Use `renpy.random`, never Python's `random`. Code with side effects checks `_in_replay`.
 - Twins: never branch on twin names; per-twin differences are data keyed by `core.TWINS`. Time: 4 slots per day (0 morning, 1 afternoon, 2 evening, 3 night), days from 1, no weeks.
 - Systems talk through signals (`core.connect`/`core.emit`) and registries, not by reaching into each other. Never emit signals from screens.
+- Every signal is registered once, with `core.register_signal`, by the folder that emits it.
 
 **Screens**
 - Layout by variant: none = PC, `small` = phone, `medium` = tablet; input by `touch` (no hover-only actions, tap alternatives to drag). Never check `renpy.android`.
@@ -77,18 +78,18 @@ The git repo is the whole project folder (`unexpected-dev/`). A session locked t
 What each folder offers the others. ○ planned (names may change until done) · ✔ done. Update by the publishing rule above.
 
 **core**
-- ○ `gs`: the saved state. `core.Definition`: base class for definitions (`kind`, `id`, `template`).
-- ○ `core.register_kind(kind, per_twin)`, `core.get(kind, id)`, `core.exists(kind, id)`, `core.all(kind)` (not in screens)
-- ○ `core.flag(kind, id, key, twin=None)`, `core.set_flag(kind, id, key, value, twin=None)`: twin None = current twin for per-twin kinds
-- ○ `core.register_state(system, initial, per_twin)`, `core.state(system, twin=None)`: a system's plain-data section of `gs`
-- ○ `core.TWINS`, `core.me()`, `core.other()`, `core.swap(twin=None)`
-- ○ `core.SLOTS`, `core.day()`, `core.slot()`, `core.advance(slots=1)`, `core.sleep()`, `core.slot_name(slot)`
-- ○ `core.connect(signal, fn)`, `core.emit(signal, **kw)`
-- ○ `Req` (`.check(twin=None)`, `.describe()`), `ReqAll`, `ReqAny`, `ReqNot`, `ReqFlag(kind, id, key, value=True)`, `ReqSlot(*slots)`, `ReqDay(min=None, max=None)`, `ReqTwin(twin)`
-- ○ `core.StateAction(fn, *args, **kwargs)`, `core.label_for(kind, id, verb=None)`, `core.asset(kind, id, *parts)`
-- ○ `core.SAVE_VERSION`, `@core.migration(version)`, `core.RENAMES`, `core.register_save_info(fn)`
-- ○ `label start`: new game, then `world_loop`
-- Signals: ○ `game_started()`, `game_loaded()`, `time_changed(twin, day, slot)`, `twin_swapped(twin)`
+- ✔ `gs`: the saved state (`core.GameState`, per-twin parts in `core.TwinState`). `core.Definition(id, template=None)`: base class for definitions; a subclass sets `kind`. Attributes `kind`, `id`, `template` (read-only dict of flag defaults: None/bool/int/float/str or tuples of those). Frozen after init.
+- ✔ `core.register_kind(kind, per_twin, id_parts=1, asset_dir=None)` (`id_parts`: dot-separated parts in ids, 3 for locations; `asset_dir`: folder under images/, default the kind), `core.get(kind, id)`, `core.exists(kind, id)`, `core.all(kind)` (not in screens)
+- ✔ `core.flag(kind, id, key, twin=None)`, `core.set_flag(kind, id, key, value, twin=None)`: twin None = current twin for per-twin kinds. `key` must be in the definition's template; values are None/bool/int/float/str or tuples of those
+- ✔ `core.register_state(system, initial, per_twin, ids=None)`, `core.state(system, twin=None)`: a system's plain-data section of `gs` (a dict); missing sections and missing top-level keys are added from `initial` on load; `ids={key: kind}` marks the keys that hold ids, so renames reach them. `core.copy_plain(value)`: rollback-safe deep copy of plain data (e.g. from JSON)
+- ✔ `core.TWINS`, `core.me()`, `core.other(twin=None)`, `core.swap(twin=None)`, `core.twin_name(twin=None)`
+- ✔ `core.SLOTS` = `(0, 1, 2, 3)` with `core.MORNING`/`AFTERNOON`/`EVENING`/`NIGHT`, `core.day(twin=None)`, `core.slot(twin=None)`, `core.advance(slots=1)`, `core.sleep()`, `core.slot_name(slot)`; changes act on the current twin
+- ✔ `core.register_signal(signal, *args)` (each folder registers the signals it emits, at init), `core.connect(signal, fn)` (at init only, band 100), `core.emit(signal, **kw)`
+- ✔ `Req(text=None)` (`.check(twin=None)`, `.describe()`: player text, translated, or None; `.validate()`), `ReqAll`, `ReqAny`, `ReqNot`, `ReqFlag(kind, id, key, value=True)`, `ReqSlot(*slots)`, `ReqDay(min=None, max=None)`, `ReqTwin(twin)`; every Req takes `text=_("...")`; Reqs held by definitions are validated when init ends
+- ✔ `core.StateAction(fn, *args, **kwargs)`, `core.label_for(kind, id, verb=None)` (e.g. `npc__hana__chat`, `location__town__home__living_room`), `core.asset(kind, id, *parts)` (`images/<asset_dir>/<id, dots as slashes>/<label name>__<parts>`, e.g. `images/world/town/home/living_room/location__town__home__living_room__bg_0.webp`)
+- ✔ `core.SAVE_VERSION` (the highest migration number, set when init ends), `@core.migration(version)` (numbers from 2, unique across folders), `core.RENAMES = {kind: {old_id: new_id}}` (fill at init), `core.register_save_info(fn)` (fn() returns a dict of extra save JSON fields; core writes `version`, `twin`, `day`, `slot`); in developer mode, saving raises if `gs` holds anything but plain data
+- ✔ `label start`: `core.new_game()` (sections, then `game_started`), then `world_loop` if it exists
+- Signals: ✔ `game_started()`, `game_loaded()`, `time_changed(twin, day, slot)`, `twin_swapped(twin)`
 
 **world**
 - ○ `world.add_space/add_place/add_location/add_connection/add_menu/add_npc/add_object(...)`

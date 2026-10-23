@@ -27,7 +27,7 @@ Its gaps, to fix here:
 Nothing.
 
 ## Tasks
-- [ ] 1. **Loader.** `physics_loader.rpy` at init -600: `renpy.add_python_directory("code/physics/")`, import the modules, add them to `config.reload_modules`. Done when: lint passes and the console can create `uxphys_math.Vector2(1, 2)`. *Written; waiting for the user to run lint and the console check.*
+- [x] 1. **Loader.** `physics_loader.rpy` at init -600: `renpy.add_python_directory("code/physics/")`, import the modules, add them to `config.reload_modules`. Done when: lint passes and the console can create `uxphys_math.Vector2(1, 2)`. *2026-10-23: the user confirmed lint and the console check pass.*
 - [x] 2. **Math.** `uxphys_math.py`: `Vector2`, `Vector2i`, `Rect2`, `Rect2i`, `Transform2D` with Godot 4.4 methods (length, normalized, dot, cross, angle, rotated, lerp, move_toward, clamp, snapped, intersects, encloses, merge, grow, has_point, intersects_segment, xform…). Done when: `test_uxphys_math.py` passes.
 - [x] 3. **Collision.** `uxphys_collide.py`: rect and circle shapes, overlap tests, `CollisionGrid` (terrain cells with speed factor, static solids hashed by cell with owners so they can be removed, dynamic bodies, layers and masks), swept movement, `Body.move_and_slide()` returning collisions with normal and collider. Done when: tests cover tunnelling at high speed, sliding along walls, layer masks.
 - [x] 4. **Areas.** `Area` with enter/exit callbacks for any body, evaluated once per tick. Done when: tests cover enter, stay, exit and removal while inside.

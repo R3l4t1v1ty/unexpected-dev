@@ -160,9 +160,11 @@ What each folder offers the others. ○ planned (names may change until done) ·
 - ○ `call fx_loading(tips=None)`, `fx.add_tip(text, group=None)`, `persistent.fx_fake_loading`, `fx_mirage`
 
 **ui**
-- ○ `uix.register_menu_tab(id, name, screen, order=100, requires=None)`, `uix.register_hud_panel(id, screen, name, order=100)`, `screen hud_root`
-- ○ `uix.notify(text)`, components `uix_panel(title)` and friends, tap-to-place helper
-- ○ Say screen: thought lines via `Character(..., show_thought=True)`
-- ○ Choice screen: a choice with `req=` (any `Req`), e.g. `"Lift the beam" (req=ReqStat("str", 12)):`, shows greyed out with `req.describe()` when it fails; use `if` to hide a choice instead
+- ✔ Game menu: `uix.register_menu_tab(id, name, screen, order=100, requires=None, group="story", main_menu=False, pc_only=False)` (at init 100; the tab's screen is shown inside the shell and gets the keyword arguments of `uix.MenuTab`; it is a used screen, so its own variables change with `SetLocalVariable`), `uix.MenuTab(id, **kwargs)` (action; insensitive while the tab is hidden), `uix.has_menu_tab(id)`, `screen uix_scroll(yinitial=0.0, spacing=0)` for scrolling tab content. The quick menu's Story button opens tab `story`
+- ✔ HUD: `screen hud_root` (world/ shows it), `uix.register_hud_panel(id, screen, name, order=100, size=(600, 400), drop=None)`. The panel screen takes `(panel, part)`: part "body" draws inside the window; part "drags" holds only `use uix_hud_slot(panel, key, xy, size=None)` and `use uix_hud_item(panel, key, child, xy, size=None)`. `drop(src_panel, src_key, dst_key)` runs through core.StateAction when an item lands on one of the panel's slots (drag, or tap item then tap slot). `uix.HudToggle(id)`, `uix.hud_open(id)`, `uix.hud_close(id)`
+- ✔ `uix.notify(text)`: toasts (renpy.notify goes through it too)
+- ✔ Components: `screen uix_panel(title=None)` (put content inside), styles `uix_button`, `uix_accent_button`, `screen uix_tooltip` (`use uix_tooltip` last; never hide what touch players need in a tooltip), `screen uix_message(message, title=None)` (call screen), the standard `confirm`
+- ✔ Say screen: `Character(..., show_thought=True)` lines use the skin's thought textbox; `uix.add_textbox_skin(id, name, background, thought_background, bottom=0, name_y=25, text_y=85)`
+- ✔ Choice screen: a choice with `req=` (any `Req`), e.g. `"Lift the beam" (req=ReqStat("str", 12)):`, shows greyed out with `req.describe()` when it fails; use `if` to hide a choice instead
 
 **dev**: nothing; no folder may depend on dev/.

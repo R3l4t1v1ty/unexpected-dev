@@ -16,6 +16,10 @@
 # Each save's JSON (FileJson in the load screen) gets version, twin, day and
 # slot, plus the fields from core.register_save_info() functions. In
 # developer mode, saving also checks that gs holds only plain data.
+#
+# core.snapshot() gives gs as plain data, and core.migrate(data) runs such
+# data through the same steps as a load, without touching the live gs (dev/'s
+# fixture saves).
 
 init offset = -500
 
@@ -346,3 +350,185 @@ init python in core:
             raise LookupError("core: problems with renamed ids:\n" + "\n".join(problems))
 
         SAVE_VERSION = builtins.max(MIGRATIONS, default=1)
+
+    ##########################################################################
+    # Snapshots: gs as plain data, and migrating plain data (dev/'s fixture
+    # saves).
+    #
+    #     {"version", "twin", "shared": {"flags", "sys"},
+    #      "twins": {twin: {"day", "slot", "flags", "sys"}}}
+
+    SNAPSHOT_SHAPE = ("version", "twin", "shared", "twins")
+    SNAPSHOT_SHARED_SHAPE = ("flags", "sys")
+    SNAPSHOT_TWIN_SHAPE = ("day", "slot", "flags", "sys")
+
+    def snapshot_of(gs):
+        """
+        `gs` (a GameState) as new plain data in the snapshot shape.
+        """
+        twins = { }
+        for twin, t in gs.twins.items():
+            twins[twin] = { "day": t.day, "slot": t.slot, "flags": copy_plain(t.flags), "sys": copy_plain(t.sys) }
+
+        return {
+            "version": gs.version,
+            "twin": gs.twin,
+            "shared": { "flags": copy_plain(gs.shared["flags"]), "sys": copy_plain(gs.shared["sys"]) },
+            "twins": twins,
+            }
+
+    def snapshot():
+        """
+        The live gs as new plain data that shares nothing with it:
+        {"version", "twin", "shared": {"flags", "sys"}, "twins": {twin:
+        {"day", "slot", "flags", "sys"}}}.
+        """
+        return snapshot_of(store.gs)
+
+    def snapshot_error(message):
+        return ValueError("core: migrate: %s. The data must have the shape of core.snapshot()." % (message,))
+
+    def check_keys(d, keys, path):
+        """
+        Raises unless d is a dict with exactly these keys.
+        """
+        if not isinstance(d, builtins.dict):
+            raise snapshot_error("%s is %r, not a dict" % (path, d))
+        for k in keys:
+            if k not in d:
+                raise snapshot_error("%s has no %r" % (path, k))
+        for k in d:
+            if k not in keys:
+                raise snapshot_error("%s has an unknown key %r" % (path, k))
+
+    def check_number(value, path, allowed=None):
+        """
+        Raises unless value is a whole number from 1 up (or in `allowed`).
+        """
+        ok = not isinstance(value, bool) and isinstance(value, int)
+        if ok:
+            ok = value in allowed if allowed is not None else value >= 1
+        if not ok:
+            raise snapshot_error("%s is %r" % (path, value))
+
+    def check_snapshot(data):
+        """
+        Raises ValueError unless `data` has the snapshot shape and holds
+        only plain data.
+        """
+        check_keys(data, SNAPSHOT_SHAPE, "data")
+        check_number(data["version"], "data['version']")
+        if data["twin"] not in TWINS:
+            raise snapshot_error("data['twin'] is %r, not one of %s" % (data["twin"], ", ".join(TWINS)))
+
+        check_keys(data["shared"], SNAPSHOT_SHARED_SHAPE, "data['shared']")
+        for k in SNAPSHOT_SHARED_SHAPE:
+            if not isinstance(data["shared"][k], builtins.dict):
+                raise snapshot_error("data['shared'][%r] is %r, not a dict" % (k, data["shared"][k]))
+
+        check_keys(data["twins"], TWINS, "data['twins']")
+        for twin in TWINS:
+            path = "data['twins'][%r]" % (twin,)
+            d = data["twins"][twin]
+            check_keys(d, SNAPSHOT_TWIN_SHAPE, path)
+            check_number(d["day"], path + "['day']")
+            check_number(d["slot"], path + "['slot']", SLOTS)
+            for k in ("flags", "sys"):
+                if not isinstance(d[k], builtins.dict):
+                    raise snapshot_error("%s[%r] is %r, not a dict" % (path, k, d[k]))
+
+        where = find_unplain(data, "data")
+        if where is not None:
+            raise snapshot_error("%s isn't plain data" % (where,))
+
+    def check_renames(renames):
+        """
+        Raises ValueError unless `renames` is {kind: {old_id: new_id}}.
+        """
+        ok = isinstance(renames, builtins.dict)
+        if ok:
+            for kind, table in renames.items():
+                if not isinstance(kind, str) or not isinstance(table, builtins.dict):
+                    ok = False
+                    break
+                if not builtins.all(isinstance(o, str) and isinstance(n, str) for o, n in table.items()):
+                    ok = False
+                    break
+        if not ok:
+            raise ValueError("core: migrate: renames must be {kind: {old_id: new_id}}, not %r." % (renames,))
+
+    def gamestate_from(data):
+        """
+        A detached GameState holding a copy of snapshot-shaped data. Made
+        without __init__, which would add sections before migrations run.
+        """
+        gs = GameState.__new__(GameState)
+        gs.version = data["version"]
+        gs.twin = data["twin"]
+        gs.shared = { "flags": copy_plain(data["shared"]["flags"]), "sys": copy_plain(data["shared"]["sys"]) }
+        gs.twins = { }
+
+        for twin in TWINS:
+            d = data["twins"][twin]
+            ts = TwinState.__new__(TwinState)
+            ts.day = d["day"]
+            ts.slot = d["slot"]
+            ts.flags = copy_plain(d["flags"])
+            ts.sys = copy_plain(d["sys"])
+            gs.twins[twin] = ts
+
+        return gs
+
+    def migrate(data, migrations=None, renames=None):
+        """
+        New plain data in the snapshot shape: `data` brought up to date by
+        the code a load uses (update_state): migrations newer than
+        data["version"], then renames, then missing sections and keys.
+
+        `migrations`
+            {version: function} to use instead of the registered migrations;
+            the target version is then the highest of them. For tests.
+        `renames`
+            {kind: {old_id: new_id}} to use instead of core.RENAMES.
+
+        The migrations get a detached GameState made from the data. While
+        they run, store.gs is that GameState (as during a load, so helpers
+        like core.state() work on it); the live gs is put back afterwards
+        and never changed. Emits nothing and doesn't block rollback.
+        """
+        check_snapshot(data)
+
+        if migrations is None:
+            table = MIGRATIONS
+            target = SAVE_VERSION
+        else:
+            if not isinstance(migrations, builtins.dict):
+                raise TypeError("core: migrate: migrations must be {version: function}, not %r." % (migrations,))
+            table = { }
+            for version, fn in migrations.items():
+                add_migration(table, version, fn)
+            target = builtins.max(table, default=1)
+
+        if renames is None:
+            renames = RENAMES
+        else:
+            check_renames(renames)
+
+        if data["version"] > target:
+            raise ValueError("core: migrate: the data is version %r, newer than version %r." % (data["version"], target))
+
+        gs = gamestate_from(data)
+
+        had_live = hasattr(store, "gs")
+        live = getattr(store, "gs", None)
+        store.gs = gs
+
+        try:
+            update_state(gs, table, target, renames)
+        finally:
+            if had_live:
+                store.gs = live
+            else:
+                del store.gs
+
+        return snapshot_of(gs)

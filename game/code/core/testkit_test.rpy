@@ -150,6 +150,9 @@ init python in core_test:
                 ("saves", saves_checks),
                 ("helpers", helpers_checks),
                 ("start", start_checks),
+                ("validators", validators_checks),
+                ("lookups", lookups_checks),
+                ("snapshot", snapshot_checks),
                 ):
             c.extend(fn(), prefix)
         return c

@@ -5,11 +5,11 @@ Systems only; story comes after. Each milestone lists folders in the order to st
 ## M1: Foundation
 Goal: a new game starts, saves and loads with the new state model; ui and dev tooling exist; the RPG is designed.
 
-Done so far: core, physics, the RPG design (with relationships, factions and the world graph, 2026-10-23), the Android size decision.
+Done so far: core tasks 1–12, physics, the RPG design (with relationships, factions and the world graph, 2026-10-23), the Android size decision.
 
 | Folder | Work |
 |---|---|
-| core | Everything: stores, definitions, registry, `gs`, flags, clocks, signals, `Req`, migrations, `StateAction`, `label_for` / `asset`, `label start` |
+| core | Everything: stores, definitions, registry, `gs`, flags, clocks, signals, `Req`, migrations, `StateAction`, `label_for` / `asset`, `label start`. Added 2026-10-24 for dev: validator registry and kind/section lookups (tasks 13–14) |
 | ui | Clean up the moved standard screens, variants, game-menu tab registry, HUD container |
 | dev | Test menu, debug overlay (first version), content validator (first version) |
 | physics | All of it can happen in parallel; it depends on nothing |

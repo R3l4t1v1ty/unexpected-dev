@@ -286,6 +286,20 @@ init python in core:
         kind_info(kind) # raises LookupError for an unknown kind
         return tuple(REGISTRY[kind].values())
 
+    def kinds():
+        """
+        The names of all registered kinds, sorted, as a tuple. Fine in
+        screens.
+        """
+        return tuple(builtins.sorted(KINDS))
+
+    def per_twin(kind):
+        """
+        True if each twin has their own flags for `kind`. Raises LookupError
+        for an unknown kind.
+        """
+        return kind_info(kind).per_twin
+
     def is_frozen():
         """
         True once init has finished and definitions are frozen.

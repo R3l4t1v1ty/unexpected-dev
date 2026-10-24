@@ -304,6 +304,20 @@ init python in core:
             raise LookupError("core: unknown system %r.%s Sections are added with core.register_state()." % (system, did_you_mean(system, SYSTEMS)))
         return info
 
+    def systems():
+        """
+        The names of all systems with a section in gs, sorted, as a tuple.
+        Fine in screens.
+        """
+        return tuple(builtins.sorted(SYSTEMS))
+
+    def system_per_twin(system):
+        """
+        True if each twin has their own section of `system`. Raises
+        LookupError for an unknown system.
+        """
+        return system_info(system).per_twin
+
     def state(system, twin=None):
         """
         The section (a dict) of `system`. `twin` (default: the current twin)

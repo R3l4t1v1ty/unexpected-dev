@@ -85,7 +85,7 @@ init python in core_test:
         c.equal("asset: an unregistered kind",
             core.asset("core_test_adv", "cave.door_1", "open.webp"), "images/core_test_adv/cave/door_1/core_test_adv__cave__door_1__open.webp")
         c.equal("asset: the file name starts with the label name",
-            core.asset("core_test_place", "town.home.hall", "bg_0.webp").rsplit("/", 1)[1], core.label_for("core_test_place", "town.home.hall") + "__bg_0.webp")
+            core.asset("core_test_place", "town.home.hall", "bg_0.webp").rsplit("/", 1)[1], "__".join([ core.label_for("core_test_place", "town.home.hall"), "bg_0.webp" ]))
         c.check("asset: same id and file in two kinds give two file names",
             core.asset("core_test", "alpha", "icon.webp").rsplit("/", 1)[1] != core.asset("core_test_other", "alpha", "icon.webp").rsplit("/", 1)[1])
         for part in ("BG.webp", "a/b.webp", "..", "", "bg 0.webp", "a__b.webp", "bg_.webp", 5):

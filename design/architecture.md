@@ -152,7 +152,8 @@ label world_loop:
 | -300 | system classes (`*_py.rpy`) |
 | 0 | styles, screens, content data (`*_ini.rpy`) |
 | 100 | wiring: signal connections, tab and panel registration |
-| 900 | freeze definitions, validate (developer mode) |
+| 900 | finish and validate definitions; register validators for dev/ |
+| 999 | core freezes definitions, checks Reqs, renames and signals (raises) |
 
 Your code can use -999…999; Ren'Py's own code sits outside that range. Use `init offset = N` at the top of a file instead of numbering each block.
 

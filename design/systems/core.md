@@ -20,7 +20,7 @@ TwinState
   sys          {system: {...}}             # each system's own plain-data section
 ```
 
-- **Definitions** (`core.Definition` subclasses) carry `kind`, `id`, and `template` (flag defaults). They register themselves on creation, are frozen at init 900, and pickle as `(kind, id)`.
+- **Definitions** (`core.Definition` subclasses) carry `kind`, `id`, and `template` (flag defaults). They register themselves on creation, are frozen at init 999, and pickle as `(kind, id)`.
 - **Kinds** are registered with their scope: `core.register_kind("location", per_twin=True)`. Per-twin kinds read and write the current twin's flags unless a twin is given.
 - **System sections** hold state that isn't a flag on a definition (current location, inventory, favourites…). A system registers its initial section: `core.register_state("world", initial=fn, per_twin=True)`. Sections are created at new game, and after loading a save that lacks them. Never on read.
 
@@ -40,6 +40,9 @@ TwinState
 | `core.StateAction(fn, *args, **kwargs)` | Screen action that changes state and survives load |
 | `core.label_for(kind, id, verb=None)`, `core.asset(kind, id, *parts)` | Label names and asset paths from ids |
 | `core.SAVE_VERSION`, `core.migration(version)`, `core.RENAMES`, `core.register_save_info(fn)` | Saves and migrations |
+| `core.register_validator(name, fn)`, `core.run_validators()` | Each folder's content check (missing labels and assets), run by dev/; never raises |
+| `core.kinds()`, `core.per_twin(kind)`, `core.systems()`, `core.system_per_twin(system)` | What's registered, for dev/'s inspector |
+| `core.snapshot()`, `core.migrate(data, migrations=None, renames=None)` | `gs` as plain data, and the load-time update run on plain data, for dev/'s fixture saves |
 | `label start` | New game: build state, emit `game_started`, go to `world_loop` if it exists |
 
 Signals: `game_started()`, `game_loaded()`, `time_changed(twin, day, slot)`, `twin_swapped(twin)`.

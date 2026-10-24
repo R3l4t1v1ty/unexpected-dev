@@ -12,4 +12,16 @@ label start:
 
     # Until world/ has a world_loop.
     "The world isn't built yet."
+    
+    "The world isn't built yet.1"
+    
+    "The world isn't built yet.2"
+    
+    "The world isn't built yet.3"
+    
+    "The world isn't built yet.4"
+    
+    "The world isn't built yet.5"
+    
+    "The world isn't built yet.6"
     return

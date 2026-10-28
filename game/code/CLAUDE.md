@@ -161,7 +161,7 @@ What each folder offers the others. ○ planned (names may change until done) ·
 - Signals: ○ `achievement_unlocked(id)`
 
 **fx**
-- ○ `fx.music(key)`, `fx.ambient(key)`, `fx.stop_music()`, `fx.reconcile()`, `fx.register_music_provider(fn)`, `fx.sound(id)`
+- ✔ Audio: `fx.add_track(key, path, volume=1.0)`, `fx.add_sound(key, path, volume=1.0)` (at init; `path` relative to game/, files under `audio/music`, `audio/ambience`, `audio/sfx`), `fx.sound(key, volume=1.0)` (sounds overlap). `fx.music(key, fade=None)` sets an override that stays until changed (`None` hands music back to providers), `fx.ambient(key, fade=None)` the same for the ambience loop, `fx.stop_music(fade=None)` (silence until the next `fx.music`), `fx.SILENCE`, `fx.register_music_provider(fn, order=100)` (at init; `fn(layer)` with layer `"music"` or `"ambient"` returns a track key, `fx.SILENCE` or None; the first non-None by order wins), `fx.reconcile(fade=None)` (world_loop calls it every pass; also runs after load). fx owns channels `music1`, `music2`, `ambience`: never play on them directly. Overrides are shared by both twins; whatever ends an event calls `fx.music(None)`
 - ○ transforms `fx_zoom`, `fx_slide`, `fx_slide_zoom`, `fx_rotate`, `fx_blur`, `fx_shake`; `persistent.fx_reduced_motion`
 - ○ `call fx_loading(tips=None)`, `fx.add_tip(text, group=None)`, `persistent.fx_fake_loading`, `fx_mirage`
 

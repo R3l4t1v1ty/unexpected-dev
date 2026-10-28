@@ -200,7 +200,7 @@ init python:
     build.classify('game/code/physics/test_*', None)
     build.classify('game/code/**/ref_*', None)
     build.classify('**/__pycache__/', None)
-
+    build.classify("game/code/**/test_audio/**", None)
     ## To archive files, classify them as 'archive'.
 
     # build.classify('game/**.png', 'archive')
